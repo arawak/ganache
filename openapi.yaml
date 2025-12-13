@@ -1,0 +1,618 @@
+openapi: 3.1.0
+info:
+  title: Ganache Media Service API
+  description: >
+    Ganache is a lightweight media catalog + image-serving service. This API supports
+    uploading, annotating, organizing, searching, and serving image assets.
+  version: 0.1.0
+servers:
+  - url: /
+tags:
+  - name: Assets
+  - name: Tags
+  - name: Media
+  - name: Health
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    AssetId:
+      name: id
+      in: path
+      required: true
+      description: Numeric asset identifier.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+
+    MediaVariant:
+      name: variant
+      in: path
+      required: true
+      description: Image variant to serve.
+      schema:
+        type: string
+        enum: [thumb, content, original]
+
+    Page:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+
+    PageSize:
+      name: pageSize
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 30
+
+    Sort:
+      name: sort
+      in: query
+      required: false
+      description: Sort order for search results.
+      schema:
+        type: string
+        enum: [newest, oldest, relevance]
+        default: newest
+
+    Query:
+      name: q
+      in: query
+      required: false
+      description: Full-text query (searched across title, caption, and tags).
+      schema:
+        type: string
+        maxLength: 500
+
+    TagFilter:
+      name: tag
+      in: query
+      required: false
+      description: Filter by tag name. Repeatable to require multiple tags.
+      schema:
+        type: array
+        items:
+          type: string
+          maxLength: 80
+      explode: true
+      style: form
+
+    IncludeDeleted:
+      name: includeDeleted
+      in: query
+      required: false
+      description: Include soft-deleted assets in results (admin use).
+      schema:
+        type: boolean
+        default: false
+
+  schemas:
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          examples: [bad_request, unauthorized, forbidden, not_found, conflict, internal]
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    AssetVariantUrls:
+      type: object
+      additionalProperties: false
+      required: [thumb, content, original]
+      properties:
+        thumb:
+          type: string
+          format: uri-reference
+          example: /media/123/thumb
+        content:
+          type: string
+          format: uri-reference
+          example: /media/123/content
+        original:
+          type: string
+          format: uri-reference
+          example: /media/123/original
+
+    Asset:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - caption
+        - credit
+        - source
+        - usageNotes
+        - tags
+        - width
+        - height
+        - bytes
+        - mime
+        - createdAt
+        - updatedAt
+        - variants
+      properties:
+        id:
+          type: integer
+          format: int64
+          minimum: 1
+        title:
+          type: string
+          maxLength: 255
+        caption:
+          type: string
+        credit:
+          type: string
+          maxLength: 255
+        source:
+          type: string
+          maxLength: 255
+        usageNotes:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+            maxLength: 80
+        width:
+          type: integer
+          minimum: 1
+        height:
+          type: integer
+          minimum: 1
+        bytes:
+          type: integer
+          format: int64
+          minimum: 0
+        mime:
+          type: string
+          maxLength: 64
+          example: image/jpeg
+        originalFilename:
+          type: string
+          maxLength: 255
+        sha256:
+          type: string
+          description: Hex-encoded SHA-256 of the original bytes (optional to expose).
+          minLength: 64
+          maxLength: 64
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        deletedAt:
+          type: string
+          format: date-time
+          nullable: true
+        variants:
+          $ref: "#/components/schemas/AssetVariantUrls"
+
+    AssetUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+          maxLength: 255
+        caption:
+          type: string
+        credit:
+          type: string
+          maxLength: 255
+        source:
+          type: string
+          maxLength: 255
+        usageNotes:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+            maxLength: 80
+
+    AssetSearchResponse:
+      type: object
+      additionalProperties: false
+      required: [items, page, pageSize, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Asset"
+        page:
+          type: integer
+          minimum: 1
+        pageSize:
+          type: integer
+          minimum: 1
+        total:
+          type: integer
+          minimum: 0
+
+    Tag:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          maxLength: 80
+          example: action-shot
+
+    TagListResponse:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tag"
+
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      summary: Liveness check
+      operationId: getHealthz
+      responses:
+        "200":
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+  /readyz:
+    get:
+      tags: [Health]
+      summary: Readiness check
+      operationId: getReadyz
+      responses:
+        "200":
+          description: Service is ready (DB reachable, storage available)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "503":
+          description: Not ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/assets:
+    get:
+      tags: [Assets]
+      summary: Search and browse assets
+      operationId: searchAssets
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Query"
+        - $ref: "#/components/parameters/TagFilter"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - $ref: "#/components/parameters/Sort"
+        - $ref: "#/components/parameters/IncludeDeleted"
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetSearchResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    post:
+      tags: [Assets]
+      summary: Upload a new asset
+      description: >
+        Uploads an image, generates variants, and stores metadata. Uses multipart/form-data.
+        A successful response includes stable variant URLs suitable for editor embedding.
+      operationId: uploadAsset
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                title:
+                  type: string
+                  maxLength: 255
+                caption:
+                  type: string
+                credit:
+                  type: string
+                  maxLength: 255
+                source:
+                  type: string
+                  maxLength: 255
+                usageNotes:
+                  type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+                    maxLength: 80
+            encoding:
+              tags:
+                style: form
+                explode: true
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Asset"
+        "400":
+          description: Bad request (e.g., file too large, invalid image)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Conflict (e.g., duplicate upload handled as conflict or returned existing)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/assets/{id}:
+    get:
+      tags: [Assets]
+      summary: Get an asset by id
+      operationId: getAsset
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AssetId"
+      responses:
+        "200":
+          description: Asset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Asset"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    patch:
+      tags: [Assets]
+      summary: Update asset metadata
+      operationId: updateAsset
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AssetId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssetUpdate"
+      responses:
+        "200":
+          description: Updated asset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Asset"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    delete:
+      tags: [Assets]
+      summary: Soft delete an asset
+      operationId: deleteAsset
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/AssetId"
+      responses:
+        "204":
+          description: Deleted
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/tags:
+    get:
+      tags: [Tags]
+      summary: List tags (optionally by prefix)
+      operationId: listTags
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: prefix
+          in: query
+          required: false
+          description: Prefix filter for tag autocomplete.
+          schema:
+            type: string
+            maxLength: 80
+        - $ref: "#/components/parameters/Page"
+        - name: pageSize
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        "200":
+          description: Tag list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TagListResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /media/{id}/{variant}:
+    get:
+      tags: [Media]
+      summary: Serve image bytes for an asset variant
+      operationId: getMediaVariant
+      parameters:
+        - $ref: "#/components/parameters/AssetId"
+        - $ref: "#/components/parameters/MediaVariant"
+      responses:
+        "200":
+          description: Image bytes
+          headers:
+            Cache-Control:
+              description: Cache policy for the returned asset.
+              schema:
+                type: string
+            ETag:
+              description: ETag for conditional requests.
+              schema:
+                type: string
+            Content-Type:
+              description: MIME type of the returned asset.
+              schema:
+                type: string
+          content:
+            image/*:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"

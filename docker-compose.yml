@@ -1,0 +1,21 @@
+services:
+  mariadb:
+    image: mariadb:11.4
+    container_name: ganache-mariadb
+    ports:
+      - "3306:3306"
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: ganache
+      MARIADB_USER: ganache
+      MARIADB_PASSWORD: ganache
+    volumes:
+      - ./.data/mariadb:/var/lib/mysql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p", "root"]
+      interval: 5s
+      timeout: 5s
+      start_period: 15s
+      retries: 20
+

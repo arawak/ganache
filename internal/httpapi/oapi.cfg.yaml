@@ -1,0 +1,5 @@
+package: httpapi
+generate:
+  - chi-server
+  - types
+output: internal/httpapi/oapi.gen.go

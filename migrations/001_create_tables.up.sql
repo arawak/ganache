@@ -1,0 +1,33 @@
+CREATE TABLE IF NOT EXISTS asset (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(255) NOT NULL DEFAULT '',
+    caption TEXT NOT NULL,
+    credit VARCHAR(255) NOT NULL DEFAULT '',
+    source VARCHAR(255) NOT NULL DEFAULT '',
+    usage_notes TEXT NOT NULL,
+    width INT NOT NULL,
+    height INT NOT NULL,
+    bytes BIGINT NOT NULL,
+    mime VARCHAR(64) NOT NULL,
+    original_filename VARCHAR(255) NOT NULL,
+    sha256 CHAR(64) NOT NULL,
+    tag_text TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL,
+    UNIQUE KEY uk_asset_sha256 (sha256),
+    FULLTEXT KEY ft_asset_text (title, caption, tag_text)
+);
+
+CREATE TABLE IF NOT EXISTS tag (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(80) NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS asset_tag (
+    asset_id BIGINT UNSIGNED NOT NULL,
+    tag_id BIGINT UNSIGNED NOT NULL,
+    PRIMARY KEY (asset_id, tag_id),
+    CONSTRAINT fk_asset_tag_asset FOREIGN KEY (asset_id) REFERENCES asset(id) ON DELETE CASCADE,
+    CONSTRAINT fk_asset_tag_tag FOREIGN KEY (tag_id) REFERENCES tag(id) ON DELETE CASCADE
+);

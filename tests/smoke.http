@@ -1,0 +1,114 @@
+@baseUrl = http://localhost:8080
+@token = dummy-token
+
+### Health
+GET {{baseUrl}}/healthz
+
+> {%
+client.test("health is ok", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.body.status === "ok", "status should be ok");
+});
+%}
+
+### Ready
+GET {{baseUrl}}/readyz
+
+> {%
+client.test("ready is ok", function() {
+  client.assert(response.status === 200, "expected 200");
+});
+%}
+
+### Upload asset (defaults to sample2; switch filename to sample1/3 as needed)
+POST {{baseUrl}}/api/assets
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=WebAppFormBoundary
+
+--WebAppFormBoundary
+Content-Disposition: form-data; name="file"; filename="sample2.webp"
+Content-Type: image/webp
+
+< ./sample2.webp
+--WebAppFormBoundary
+Content-Disposition: form-data; name="title"
+
+REST Smoke Asset 2
+--WebAppFormBoundary
+Content-Disposition: form-data; name="caption"
+
+Smoke upload test
+--WebAppFormBoundary
+Content-Disposition: form-data; name="tags"
+
+smoke
+--WebAppFormBoundary--
+
+> {%
+client.test("upload created or duplicate", function() {
+  client.assert(response.status === 201 || response.status === 409, "expected 201 or 409, got " + response.status);
+  client.assert(response.body.id > 0, "id should be set");
+  client.assert(response.body.variants && response.body.variants.thumb, "variants present");
+  client.global.set("uploadedAssetId", response.body.id);
+});
+%}
+
+### Search all assets
+GET {{baseUrl}}/api/assets?page=1&pageSize=10
+Authorization: Bearer {{token}}
+
+> {%
+client.test("search returns results", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.body.total >= 1, "total >= 1");
+  client.assert(response.body.items && response.body.items.length >= 1, "items present");
+  // Use the first asset ID for subsequent tests
+  if (response.body.items.length > 0) {
+    var firstAsset = response.body.items[0];
+    client.assert(firstAsset.id > 0, "first asset has valid id");
+    // Verify the uploaded asset is in the list
+    var uploadedId = client.global.get("uploadedAssetId");
+    var found = response.body.items.some(function(item) { return item.id == uploadedId; });
+    client.assert(found, "uploaded asset found in search results");
+  }
+});
+%}
+
+### Search assets with filters (q + tag)
+GET {{baseUrl}}/api/assets?q=REST&tag=smoke&page=1&pageSize=10&sort=relevance
+Authorization: Bearer {{token}}
+
+> {%
+client.test("filtered search returns asset", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.body.total >= 1, "total >= 1");
+  client.assert(response.body.items && response.body.items.length >= 1, "items present");
+  if (response.body.items.length > 0) {
+    var firstAsset = response.body.items[0];
+    client.global.set("testAssetId", firstAsset.id);
+  }
+});
+%}
+
+### Get asset by id (using asset from search)
+GET {{baseUrl}}/api/assets/1
+Authorization: Bearer {{token}}
+
+> {%
+client.test("get asset", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.body.id === 1, "got asset with id 1");
+  client.assert(response.body.variants && response.body.variants.thumb, "has variants");
+});
+%}
+
+### Media variant (thumb)
+GET {{baseUrl}}/media/1/thumb
+
+> {%
+client.test("media thumb ok", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.headers.valueOf("ETag") !== undefined, "etag present");
+  client.assert(response.headers.valueOf("Cache-Control") !== undefined, "cache header present");
+});
+%}
