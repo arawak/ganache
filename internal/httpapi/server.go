@@ -206,13 +206,40 @@ func (s *Server) UploadAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	title := formValue(r.MultipartForm.Value, "title")
+	caption := formValue(r.MultipartForm.Value, "caption")
+	credit := formValue(r.MultipartForm.Value, "credit")
+	source := formValue(r.MultipartForm.Value, "source")
+	usageNotes := formValue(r.MultipartForm.Value, "usageNotes")
+	tags := r.MultipartForm.Value["tags"]
+
+	// Validate field lengths
+	if len(title) > 255 {
+		writeError(w, http.StatusBadRequest, "bad_request", "title exceeds maximum length of 255 characters", nil)
+		return
+	}
+	if len(credit) > 255 {
+		writeError(w, http.StatusBadRequest, "bad_request", "credit exceeds maximum length of 255 characters", nil)
+		return
+	}
+	if len(source) > 255 {
+		writeError(w, http.StatusBadRequest, "bad_request", "source exceeds maximum length of 255 characters", nil)
+		return
+	}
+	for _, tag := range tags {
+		if len(tag) > 255 {
+			writeError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("tag '%s' exceeds maximum length of 255 characters", tag), nil)
+			return
+		}
+	}
+
 	assetInput := store.AssetCreate{
-		Title:            formValue(r.MultipartForm.Value, "title"),
-		Caption:          formValue(r.MultipartForm.Value, "caption"),
-		Credit:           formValue(r.MultipartForm.Value, "credit"),
-		Source:           formValue(r.MultipartForm.Value, "source"),
-		UsageNotes:       formValue(r.MultipartForm.Value, "usageNotes"),
-		Tags:             r.MultipartForm.Value["tags"],
+		Title:            title,
+		Caption:          caption,
+		Credit:           credit,
+		Source:           source,
+		UsageNotes:       usageNotes,
+		Tags:             tags,
 		Width:            save.Width,
 		Height:           save.Height,
 		Bytes:            save.Bytes,
@@ -220,12 +247,16 @@ func (s *Server) UploadAsset(w http.ResponseWriter, r *http.Request) {
 		OriginalFilename: header.Filename,
 		SHA256:           save.SHA256,
 	}
+
+	s.logger.Info("upload asset", "title", assetInput.Title, "tags", assetInput.Tags, "tagCount", len(assetInput.Tags))
+
 	asset, err := s.store.CreateAsset(r.Context(), assetInput)
 	if err != nil {
 		if errors.Is(err, store.ErrDuplicate) && asset != nil {
 			writeJSON(w, http.StatusConflict, s.toAPIAsset(asset))
 			return
 		}
+		s.logger.Error("failed to create asset", "error", err, "title", assetInput.Title, "tags", assetInput.Tags)
 		writeError(w, http.StatusInternalServerError, "internal", "failed to persist asset", map[string]any{"error": err.Error()})
 		return
 	}

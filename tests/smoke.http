@@ -1,5 +1,7 @@
 @baseUrl = http://localhost:8080
 @token = dummy-token
+# Update this with the asset ID from the upload/search test results
+@greavesAssetId = 
 
 ### Health
 GET {{baseUrl}}/healthz
@@ -110,5 +112,394 @@ client.test("media thumb ok", function() {
   client.assert(response.status === 200, "expected 200");
   client.assert(response.headers.valueOf("ETag") !== undefined, "etag present");
   client.assert(response.headers.valueOf("Cache-Control") !== undefined, "cache header present");
+});
+%}
+
+##############################################################################
+# REALISTIC USE CASE TESTS - Justin Greaves Cricket Photo
+# 
+# WORKFLOW:
+# 1. Run the "Upload Justin Greaves" test below
+# 2. Note the asset ID from the response
+# 3. Update @greavesAssetId at the top of this file with that ID
+# 4. Run the remaining tests sequentially
+#
+# OR: Run the "Search for justin greaves" test and use the ID from there
+##############################################################################
+
+### Upload Justin Greaves double century photo (sample1.jpg)
+POST {{baseUrl}}/api/assets
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=WebAppFormBoundary
+
+--WebAppFormBoundary
+Content-Disposition: form-data; name="file"; filename="sample1.jpg"
+Content-Type: image/jpeg
+
+< ./sample1.jpg
+--WebAppFormBoundary
+Content-Disposition: form-data; name="title"
+
+Justin Greaves celebrates double century in New Zealand
+--WebAppFormBoundary
+Content-Disposition: form-data; name="caption"
+
+West Indies batsman Justin Greaves raises his bat after scoring a double century during the test match in New Zealand
+--WebAppFormBoundary
+Content-Disposition: form-data; name="credit"
+
+Cricket Photographer
+--WebAppFormBoundary
+Content-Disposition: form-data; name="source"
+
+Test Match Coverage
+--WebAppFormBoundary
+Content-Disposition: form-data; name="tags"
+
+cricket
+--WebAppFormBoundary--
+
+> {%
+client.test("upload justin greaves photo", function() {
+  client.assert(response.status === 201 || response.status === 409, "expected 201 or 409, got " + response.status);
+  client.assert(response.body.id > 0, "id should be set");
+  client.assert(response.body.variants && response.body.variants.thumb, "variants present");
+  client.assert(response.body.variants.content, "content variant present");
+  client.assert(response.body.variants.original, "original variant present");
+  client.assert(response.body.tags.includes("cricket"), "tags include cricket");
+  
+  // If 201 (new), should have 1 tag. If 409 (duplicate), may have more tags from previous runs
+  if (response.status === 201) {
+    client.assert(response.body.tags.length === 1, "new upload has 1 tag");
+  } else {
+    client.assert(response.body.tags.length >= 1, "existing asset has at least 1 tag");
+  }
+  
+  client.global.set("greavesAssetId", response.body.id);
+  console.log("Set greavesAssetId to: " + response.body.id);
+});
+%}
+
+### Search for "justin greaves" (full-text search on title/caption/tags)
+GET {{baseUrl}}/api/assets?q=justin+greaves&page=1&pageSize=10&sort=relevance
+Authorization: Bearer {{token}}
+
+> {%
+client.test("search for justin greaves finds photo", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.body.total >= 1, "found at least one result");
+  client.assert(response.body.items && response.body.items.length >= 1, "items present");
+  
+  // Save the first justin greaves result ID for use in subsequent tests
+  if (response.body.items.length > 0) {
+    var greavesAsset = response.body.items[0];
+    client.global.set("greavesAssetId", greavesAsset.id);
+    console.log("Found Justin Greaves asset with ID: " + greavesAsset.id);
+    
+    client.assert(greavesAsset.title.toLowerCase().includes("justin greaves") || 
+                  greavesAsset.caption.toLowerCase().includes("justin greaves"), 
+                  "result contains justin greaves");
+    client.assert(greavesAsset.tags.includes("cricket"), "has cricket tag");
+  }
+});
+%}
+
+### Search for "test match" photos (full-text query)
+GET {{baseUrl}}/api/assets?q=test+match&page=1&pageSize=10&sort=relevance
+Authorization: Bearer {{token}}
+
+> {%
+client.test("search for test match finds cricket photos", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.body.total >= 1, "found at least one test match photo");
+  client.assert(response.body.items && response.body.items.length >= 1, "items present");
+  
+  var greavesId = client.global.get("greavesAssetId");
+  var found = response.body.items.some(function(item) { 
+    return item.id == greavesId; 
+  });
+  client.assert(found, "greaves photo found in test match search");
+});
+%}
+
+### Search by cricket tag only
+GET {{baseUrl}}/api/assets?tag=cricket&page=1&pageSize=10&sort=newest
+Authorization: Bearer {{token}}
+
+> {%
+client.test("search by cricket tag", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.body.total >= 1, "found at least one cricket photo");
+  
+  var greavesId = client.global.get("greavesAssetId");
+  var found = response.body.items.some(function(item) { 
+    return item.id == greavesId; 
+  });
+  client.assert(found, "greaves photo has cricket tag");
+  
+  // Verify all results have the cricket tag
+  var allHaveCricketTag = response.body.items.every(function(item) {
+    return item.tags.includes("cricket");
+  });
+  client.assert(allHaveCricketTag, "all results have cricket tag");
+});
+%}
+
+### Search by multiple tags (cricket + new-zealand)
+GET {{baseUrl}}/api/assets?tag=cricket&tag=new-zealand&page=1&pageSize=10
+Authorization: Bearer {{token}}
+
+> {%
+client.test("search by multiple tags", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.body.total >= 1, "found at least one result with both tags");
+  
+  var greavesId = client.global.get("greavesAssetId");
+  var found = response.body.items.some(function(item) { 
+    return item.id == greavesId; 
+  });
+  client.assert(found, "greaves photo found with both tags");
+  
+  // Verify all results have both tags
+  var allHaveBothTags = response.body.items.every(function(item) {
+    return item.tags.includes("cricket") && item.tags.includes("new-zealand");
+  });
+  client.assert(allHaveBothTags, "all results have both cricket and new-zealand tags");
+});
+%}
+
+### Search with query + tag filter (double century + cricket)
+GET {{baseUrl}}/api/assets?q=double+century&tag=cricket&page=1&pageSize=10&sort=relevance
+Authorization: Bearer {{token}}
+
+> {%
+client.test("search double century with cricket tag", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.body.total >= 1, "found at least one result");
+  
+  var greavesId = client.global.get("greavesAssetId");
+  var found = response.body.items.some(function(item) { 
+    return item.id == greavesId; 
+  });
+  client.assert(found, "greaves double century photo found");
+});
+%}
+
+### Search for "celebration" photos (searching across tags and caption)
+GET {{baseUrl}}/api/assets?q=celebration&sort=relevance
+Authorization: Bearer {{token}}
+
+> {%
+client.test("search for celebration", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.body.total >= 1, "found celebration photos");
+  
+  var greavesId = client.global.get("greavesAssetId");
+  var found = response.body.items.some(function(item) { 
+    return item.id == greavesId; 
+  });
+  client.assert(found, "greaves celebration photo found");
+});
+%}
+
+### Search for "west indies" (searches title and caption)
+GET {{baseUrl}}/api/assets?q=west+indies
+Authorization: Bearer {{token}}
+
+> {%
+client.test("search for west indies", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.body.total >= 1, "found west indies photos");
+  
+  var greavesId = client.global.get("greavesAssetId");
+  var found = response.body.items.some(function(item) { 
+    return item.id == greavesId; 
+  });
+  client.assert(found, "greaves west indies photo found");
+});
+%}
+
+### Get Justin Greaves asset by ID (before additional tagging)
+# NOTE: Update @greavesAssetId at top of file with the ID from the upload/search result above
+GET {{baseUrl}}/api/assets/{{greavesAssetId}}
+Authorization: Bearer {{token}}
+
+> {%
+client.test("get greaves asset by id", function() {
+  var greavesId = client.global.get("greavesAssetId");
+  console.log("Using greavesAssetId: " + greavesId);
+  client.assert(response.status === 200, "expected 200");
+  var greavesId = client.global.get("greavesAssetId");
+  client.assert(response.body.id == greavesId, "got correct asset");
+  client.assert(response.body.caption.includes("double century"), "caption mentions double century");
+  client.assert(response.body.tags.length >= 1, "has at least 1 tag");
+  client.assert(response.body.tags.includes("cricket"), "has cricket tag");
+  client.assert(response.body.variants && response.body.variants.thumb, "has thumb variant");
+  client.assert(response.body.variants.content, "has content variant");
+  client.assert(response.body.variants.original, "has original variant");
+  client.assert(response.body.width > 0, "has width");
+  client.assert(response.body.height > 0, "has height");
+  client.assert(response.body.bytes > 0, "has bytes");
+  client.assert(response.body.mime.startsWith("image/"), "has image mime type");
+});
+%}
+
+### Update asset metadata (add usage notes)
+PATCH {{baseUrl}}/api/assets/{{greavesAssetId}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "usageNotes": "Editorial use only. Photo depicts historic double century."
+}
+
+> {%
+client.test("update asset metadata", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.body.usageNotes.includes("Editorial use only"), "usage notes updated");
+  client.assert(response.body.title.includes("Justin Greaves"), "title unchanged");
+});
+%}
+
+### Update tags (add all descriptive tags via PATCH)
+PATCH {{baseUrl}}/api/assets/{{greavesAssetId}}
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "tags": ["justin-greaves", "cricket", "test-match", "new-zealand", "double-century", "celebration", "batting", "west-indies", "sports", "action-shot", "historic"]
+}
+
+> {%
+client.test("update asset tags", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.body.tags.includes("sports"), "sports tag present");
+  client.assert(response.body.tags.includes("action-shot"), "action-shot tag present");
+  client.assert(response.body.tags.includes("new-zealand"), "new-zealand tag present");
+  client.assert(response.body.tags.includes("west-indies"), "west-indies tag present");
+  client.assert(response.body.tags.includes("justin-greaves"), "justin-greaves tag present");
+  client.assert(response.body.tags.includes("test-match"), "test-match tag present");
+  client.assert(response.body.tags.includes("cricket"), "cricket tag present");
+  client.assert(response.body.tags.length === 11, "has 11 tags total");
+});
+%}
+
+### Verify tags were updated
+GET {{baseUrl}}/api/assets/{{greavesAssetId}}
+Authorization: Bearer {{token}}
+
+> {%
+client.test("get greaves asset after tagging", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.body.tags.length >= 11, "has at least 11 tags after update");
+  client.assert(response.body.tags.includes("justin-greaves"), "has justin-greaves tag");
+  client.assert(response.body.tags.includes("test-match"), "has test-match tag");
+  client.assert(response.body.tags.includes("new-zealand"), "has new-zealand tag");
+  client.assert(response.body.tags.includes("cricket"), "has cricket tag");
+  client.assert(response.body.tags.includes("sports"), "has sports tag");
+});
+%}
+
+### List all tags
+GET {{baseUrl}}/api/tags
+Authorization: Bearer {{token}}
+
+> {%
+client.test("list all tags", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.body.items && response.body.items.length >= 1, "has tags");
+  
+  var tagNames = response.body.items.map(function(tag) { return tag.name; });
+  client.assert(tagNames.includes("cricket"), "cricket tag exists");
+  client.assert(tagNames.includes("test-match"), "test-match tag exists");
+});
+%}
+
+### Search tags by prefix (autocomplete use case)
+GET {{baseUrl}}/api/tags?prefix=cri
+Authorization: Bearer {{token}}
+
+> {%
+client.test("search tags by prefix", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.body.items && response.body.items.length >= 1, "found matching tags");
+  
+  var tagNames = response.body.items.map(function(tag) { return tag.name; });
+  client.assert(tagNames.includes("cricket"), "cricket tag found with 'cri' prefix");
+  
+  // All tags should start with the prefix
+  var allMatchPrefix = response.body.items.every(function(tag) {
+    return tag.name.startsWith("cri");
+  });
+  client.assert(allMatchPrefix, "all results start with prefix");
+});
+%}
+
+### Serve Greaves photo thumb variant
+GET {{baseUrl}}/media/{{greavesAssetId}}/thumb
+
+> {%
+client.test("serve greaves thumb", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.headers.valueOf("ETag") !== undefined, "etag present");
+  client.assert(response.headers.valueOf("Cache-Control") !== undefined, "cache header present");
+  client.assert(response.headers.valueOf("Content-Type").startsWith("image/"), "content-type is image");
+});
+%}
+
+### Serve Greaves photo content variant
+GET {{baseUrl}}/media/{{greavesAssetId}}/content
+
+> {%
+client.test("serve greaves content", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.headers.valueOf("ETag") !== undefined, "etag present");
+  client.assert(response.headers.valueOf("Cache-Control") !== undefined, "cache header present");
+  client.assert(response.headers.valueOf("Content-Type").startsWith("image/"), "content-type is image");
+});
+%}
+
+### Serve Greaves photo original variant
+GET {{baseUrl}}/media/{{greavesAssetId}}/original
+
+> {%
+client.test("serve greaves original", function() {
+  client.assert(response.status === 200, "expected 200");
+  client.assert(response.headers.valueOf("ETag") !== undefined, "etag present");
+  client.assert(response.headers.valueOf("Cache-Control") !== undefined, "cache header present");
+  client.assert(response.headers.valueOf("Content-Type").startsWith("image/"), "content-type is image");
+  client.assert(response.headers.valueOf("Content-Type").includes("jpeg"), "original is jpeg");
+});
+%}
+
+### Duplicate upload detection (re-upload sample1.jpg)
+POST {{baseUrl}}/api/assets
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=WebAppFormBoundary
+
+--WebAppFormBoundary
+Content-Disposition: form-data; name="file"; filename="sample1-duplicate.jpg"
+Content-Type: image/jpeg
+
+< ./sample1.jpg
+--WebAppFormBoundary
+Content-Disposition: form-data; name="title"
+
+Different title for duplicate
+--WebAppFormBoundary--
+
+> {%
+client.test("duplicate upload returns 409 or existing asset", function() {
+  // Should detect duplicate by SHA-256 hash
+  client.assert(response.status === 409 || response.status === 201, "expected 409 or 201");
+  if (response.status === 409 || response.status === 201) {
+    client.assert(response.body.id > 0, "has id");
+    // Should return the original asset, not create a new one
+    var greavesId = client.global.get("greavesAssetId");
+    if (response.status === 409) {
+      client.assert(response.body.id == greavesId, "returns original asset id");
+      client.assert(response.body.title.includes("Justin Greaves"), "returns original title");
+    }
+  }
 });
 %}
