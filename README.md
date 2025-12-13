@@ -243,12 +243,17 @@ Recommended reverse proxy behavior:
 
 ## Quickstart
 
-- Config values can come from env vars or a local `.env` (auto-loaded).
+Config values can come from env vars or a local `.env` (auto-loaded).
 
 1. Start services: `docker compose up --build`
 2. Run migrations (with compose DB up): `GANACHE_DB_DSN='ganache:ganache@tcp(localhost:3306)/ganache?parseTime=true&multiStatements=true' make migrate-up`
 3. Upload an image:
    ```bash
-   curl -X POST -F "file=@./sample.jpg" -F "title=Sample" http://localhost:8080/api/assets
+   curl -X POST -H "Authorization: Bearer dummy-token" \
+     -F "file=@./tests/sample1.jpg" \
+     -F "title=Sample Image" \
+     -F "tags=test" \
+     http://localhost:8080/api/assets
    ```
 4. Browse Swagger UI at `http://localhost:8080/swagger`
+5. Run comprehensive HTTP tests: see `tests/smoke.http` and `testing.md`
