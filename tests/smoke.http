@@ -1,5 +1,5 @@
 @baseUrl = http://localhost:8080
-@token = dummy-token
+@apiKey = 3bc4d464-5b6f-4e07-b208-d00673d9e0f4
 # Update this with the asset ID from the upload/search test results
 @greavesAssetId = 
 
@@ -24,7 +24,7 @@ client.test("ready is ok", function() {
 
 ### Upload asset (defaults to sample2; switch filename to sample1/3 as needed)
 POST {{baseUrl}}/api/assets
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 Content-Type: multipart/form-data; boundary=WebAppFormBoundary
 
 --WebAppFormBoundary
@@ -57,7 +57,7 @@ client.test("upload created or duplicate", function() {
 
 ### Search all assets
 GET {{baseUrl}}/api/assets?page=1&pageSize=10
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 
 > {%
 client.test("search returns results", function() {
@@ -78,7 +78,7 @@ client.test("search returns results", function() {
 
 ### Search assets with filters (q + tag)
 GET {{baseUrl}}/api/assets?q=REST&tag=smoke&page=1&pageSize=10&sort=relevance
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 
 > {%
 client.test("filtered search returns asset", function() {
@@ -94,7 +94,7 @@ client.test("filtered search returns asset", function() {
 
 ### Get asset by id (using asset from search)
 GET {{baseUrl}}/api/assets/1
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 
 > {%
 client.test("get asset", function() {
@@ -129,7 +129,7 @@ client.test("media thumb ok", function() {
 
 ### Upload Justin Greaves double century photo (sample1.jpg)
 POST {{baseUrl}}/api/assets
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 Content-Type: multipart/form-data; boundary=WebAppFormBoundary
 
 --WebAppFormBoundary
@@ -182,7 +182,7 @@ client.test("upload justin greaves photo", function() {
 
 ### Search for "justin greaves" (full-text search on title/caption/tags)
 GET {{baseUrl}}/api/assets?q=justin+greaves&page=1&pageSize=10&sort=relevance
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 
 > {%
 client.test("search for justin greaves finds photo", function() {
@@ -206,7 +206,7 @@ client.test("search for justin greaves finds photo", function() {
 
 ### Search for "test match" photos (full-text query)
 GET {{baseUrl}}/api/assets?q=test+match&page=1&pageSize=10&sort=relevance
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 
 > {%
 client.test("search for test match finds cricket photos", function() {
@@ -224,7 +224,7 @@ client.test("search for test match finds cricket photos", function() {
 
 ### Search by cricket tag only
 GET {{baseUrl}}/api/assets?tag=cricket&page=1&pageSize=10&sort=newest
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 
 > {%
 client.test("search by cricket tag", function() {
@@ -247,7 +247,7 @@ client.test("search by cricket tag", function() {
 
 ### Search by multiple tags (cricket + new-zealand)
 GET {{baseUrl}}/api/assets?tag=cricket&tag=new-zealand&page=1&pageSize=10
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 
 > {%
 client.test("search by multiple tags", function() {
@@ -270,7 +270,7 @@ client.test("search by multiple tags", function() {
 
 ### Search with query + tag filter (double century + cricket)
 GET {{baseUrl}}/api/assets?q=double+century&tag=cricket&page=1&pageSize=10&sort=relevance
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 
 > {%
 client.test("search double century with cricket tag", function() {
@@ -287,7 +287,7 @@ client.test("search double century with cricket tag", function() {
 
 ### Search for "celebration" photos (searching across tags and caption)
 GET {{baseUrl}}/api/assets?q=celebration&sort=relevance
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 
 > {%
 client.test("search for celebration", function() {
@@ -304,7 +304,7 @@ client.test("search for celebration", function() {
 
 ### Search for "west indies" (searches title and caption)
 GET {{baseUrl}}/api/assets?q=west+indies
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 
 > {%
 client.test("search for west indies", function() {
@@ -322,7 +322,7 @@ client.test("search for west indies", function() {
 ### Get Justin Greaves asset by ID (before additional tagging)
 # NOTE: Update @greavesAssetId at top of file with the ID from the upload/search result above
 GET {{baseUrl}}/api/assets/{{greavesAssetId}}
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 
 > {%
 client.test("get greaves asset by id", function() {
@@ -346,7 +346,7 @@ client.test("get greaves asset by id", function() {
 
 ### Update asset metadata (add usage notes)
 PATCH {{baseUrl}}/api/assets/{{greavesAssetId}}
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 Content-Type: application/json
 
 {
@@ -363,7 +363,7 @@ client.test("update asset metadata", function() {
 
 ### Update tags (add all descriptive tags via PATCH)
 PATCH {{baseUrl}}/api/assets/{{greavesAssetId}}
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 Content-Type: application/json
 
 {
@@ -386,7 +386,7 @@ client.test("update asset tags", function() {
 
 ### Verify tags were updated
 GET {{baseUrl}}/api/assets/{{greavesAssetId}}
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 
 > {%
 client.test("get greaves asset after tagging", function() {
@@ -402,7 +402,7 @@ client.test("get greaves asset after tagging", function() {
 
 ### List all tags
 GET {{baseUrl}}/api/tags
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 
 > {%
 client.test("list all tags", function() {
@@ -417,7 +417,7 @@ client.test("list all tags", function() {
 
 ### Search tags by prefix (autocomplete use case)
 GET {{baseUrl}}/api/tags?prefix=cri
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 
 > {%
 client.test("search tags by prefix", function() {
@@ -474,7 +474,7 @@ client.test("serve greaves original", function() {
 
 ### Duplicate upload detection (re-upload sample1.jpg)
 POST {{baseUrl}}/api/assets
-Authorization: Bearer {{token}}
+X-Api-Key: {{apiKey}}
 Content-Type: multipart/form-data; boundary=WebAppFormBoundary
 
 --WebAppFormBoundary

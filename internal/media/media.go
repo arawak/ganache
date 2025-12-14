@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -104,13 +105,13 @@ func (m *Manager) Save(ctx context.Context, r io.Reader, filename string, maxByt
 	if err := m.ensureDir(origPath); err != nil {
 		return nil, err
 	}
+
+	// Try to rename first (fast path)
 	if err := os.Rename(tmp.Name(), origPath); err != nil {
-		// maybe already exists, try copy
-		if !errors.Is(err, os.ErrExist) {
-			return nil, err
-		}
-		if err := copyFile(tmp.Name(), origPath); err != nil {
-			return nil, err
+		// If rename fails, try copy as fallback (handles cross-device moves)
+		if copyErr := copyFile(tmp.Name(), origPath); copyErr != nil {
+			// If both rename and copy fail, return the original error
+			return nil, fmt.Errorf("failed to move file to destination: rename failed (%w), copy failed (%v)", err, copyErr)
 		}
 	}
 

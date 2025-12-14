@@ -365,7 +365,7 @@ func isDuplicate(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "duplicate") || strings.Contains(strings.ToLower(err.Error()), "unique")
 }
 
-func (s *Store) ListTags(ctx context.Context, prefix string, page, pageSize int) ([]string, error) {
+func (s *Store) ListTags(ctx context.Context, prefix string, page, pageSize int) ([]string, int, error) {
 	if page <= 0 {
 		page = 1
 	}
@@ -381,11 +381,17 @@ func (s *Store) ListTags(ctx context.Context, prefix string, page, pageSize int)
 		args = append(args, prefix+"%")
 	}
 
-	query := "SELECT name FROM tag " + where + " ORDER BY name LIMIT ? OFFSET ?"
-	args = append(args, pageSize, offset)
-	var tags []string
-	if err := s.db.SelectContext(ctx, &tags, query, args...); err != nil {
-		return nil, err
+	countQuery := "SELECT COUNT(*) FROM tag " + where
+	var total int
+	if err := s.db.GetContext(ctx, &total, countQuery, args...); err != nil {
+		return nil, 0, err
 	}
-	return tags, nil
+
+	query := "SELECT name FROM tag " + where + " ORDER BY name LIMIT ? OFFSET ?"
+	argsWithPaging := append(append([]any{}, args...), pageSize, offset)
+	var tags []string
+	if err := s.db.SelectContext(ctx, &tags, query, argsWithPaging...); err != nil {
+		return nil, 0, err
+	}
+	return tags, total, nil
 }

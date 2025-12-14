@@ -5,10 +5,14 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/example/ganache/migrations"
+	"github.com/arawak/ganache/migrations"
 )
 
+var version = "dev"
+
 func main() {
+	fmt.Printf("ganache-migrate version %s\n", version)
+
 	dsn := os.Getenv("GANACHE_DB_DSN")
 	if dsn == "" {
 		fmt.Println("GANACHE_DB_DSN is required")

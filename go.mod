@@ -1,4 +1,4 @@
-module github.com/example/ganache
+module github.com/arawak/ganache
 
 go 1.24.0
 

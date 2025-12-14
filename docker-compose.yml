@@ -13,7 +13,7 @@ services:
       - ./.data/mariadb:/var/lib/mysql
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p", "root"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot"]
       interval: 5s
       timeout: 5s
       start_period: 15s

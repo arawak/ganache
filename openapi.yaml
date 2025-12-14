@@ -14,10 +14,10 @@ tags:
   - name: Health
 components:
   securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
 
   parameters:
     AssetId:
@@ -263,12 +263,23 @@ components:
     TagListResponse:
       type: object
       additionalProperties: false
-      required: [items]
+      required: [items, page, pageSize, total]
       properties:
         items:
           type: array
           items:
             $ref: "#/components/schemas/Tag"
+        page:
+          type: integer
+          minimum: 1
+        pageSize:
+          type: integer
+          minimum: 1
+          maximum: 500
+          default: 100
+        total:
+          type: integer
+          minimum: 0
 
     Health:
       type: object
@@ -318,7 +329,9 @@ paths:
       summary: Search and browse assets
       operationId: searchAssets
       security:
-        - bearerAuth: []
+        - apiKeyAuth: []
+      x-permissions:
+        - can_search
       parameters:
         - $ref: "#/components/parameters/Query"
         - $ref: "#/components/parameters/TagFilter"
@@ -355,12 +368,14 @@ paths:
     post:
       tags: [Assets]
       summary: Upload a new asset
+      security:
+        - apiKeyAuth: []
+      x-permissions:
+        - can_upload
       description: >
         Uploads an image, generates variants, and stores metadata. Uses multipart/form-data.
         A successful response includes stable variant URLs suitable for editor embedding.
       operationId: uploadAsset
-      security:
-        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -385,11 +400,11 @@ paths:
                   maxLength: 255
                 usageNotes:
                   type: string
-        tags:
-          type: array
-          items:
-            type: string
-            maxLength: 255
+                tags:
+                  type: array
+                  items:
+                    type: string
+                    maxLength: 255
             encoding:
               tags:
                 style: form
@@ -432,7 +447,9 @@ paths:
       summary: Get an asset by id
       operationId: getAsset
       security:
-        - bearerAuth: []
+        - apiKeyAuth: []
+      x-permissions:
+        - can_search
       parameters:
         - $ref: "#/components/parameters/AssetId"
       responses:
@@ -466,7 +483,9 @@ paths:
       summary: Update asset metadata
       operationId: updateAsset
       security:
-        - bearerAuth: []
+        - apiKeyAuth: []
+      x-permissions:
+        - can_update
       parameters:
         - $ref: "#/components/parameters/AssetId"
       requestBody:
@@ -512,7 +531,9 @@ paths:
       summary: Soft delete an asset
       operationId: deleteAsset
       security:
-        - bearerAuth: []
+        - apiKeyAuth: []
+      x-permissions:
+        - can_delete
       parameters:
         - $ref: "#/components/parameters/AssetId"
       responses:
@@ -543,7 +564,9 @@ paths:
       summary: List tags (optionally by prefix)
       operationId: listTags
       security:
-        - bearerAuth: []
+        - apiKeyAuth: []
+      x-permissions:
+        - can_search
       parameters:
         - name: prefix
           in: query

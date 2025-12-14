@@ -175,13 +175,61 @@ Ganache does **not** mandate an editor format. It exposes stable URLs and IDs so
 
 ### AuthN/AuthZ
 
-* `/api/*` endpoints require auth (e.g., JWT bearer token).
-* `/media/*` can be public (common case) or protected (configurable).
+* `/api/*` endpoints are intended to require auth; the concrete mechanism is configured via `GANACHE_AUTH_MODE`:
+  * `none` — no authentication enforced (local/dev only).
+  * `apikey` — require a configured API key on `/api/*`.
+  * `oidc` — planned: validate JWTs from an OpenID Connect / OAuth2 provider.
+* `/media/*` is public by default and can be protected by setting `GANACHE_PUBLIC_MEDIA=false`.
+* `/healthz` and `/readyz` are always unauthenticated.
 
-Authorization model (v1):
+### API key authentication (design)
 
-* `media.read` — read/search metadata
-* `media.write` — upload/edit/delete metadata
+When `GANACHE_AUTH_MODE=apikey`, Ganache authenticates requests using an `X-Api-Key` header and an API key list loaded from a configuration file.
+
+* Clients send:
+  * `X-Api-Key: <secret>` on each request to `/api/*` (and `/media/*` when `GANACHE_PUBLIC_MEDIA=false`).
+* API keys are defined in a **YAML** file pointed to by `GANACHE_API_KEYS_FILE`. If `GANACHE_API_KEYS_FILE` is not set, Ganache will look for a default `api-keys.yaml` next to the binary/working directory. The file contains a **list/array of key objects**; each object includes:
+  * `id` — a stable label (e.g., `caribbeancricket_admin`).
+  * `key` — the secret value clients send in `X-Api-Key`.
+  * `permissions` — a list of permission strings (see below).
+
+  Example `api-keys.yaml`:
+  ```yaml
+  - id: caribbeancricket_admin
+    key: "super-long-random-secret-1"
+    permissions:
+      - can_search
+      - can_upload
+      - can_update
+      - can_delete
+
+  - id: caribbeancricket_readonly
+    key: "super-long-random-secret-2"
+    permissions:
+      - can_search
+  ```
+
+* On startup in `apikey` mode, Ganache loads this file and builds an in-memory lookup from key value to its id + permissions.
+* If the header is missing or the key is unknown, the request fails with `401 unauthorized`; if the key is known but lacks required permissions for the endpoint, the request fails with `403 forbidden`.
+
+### Permissions model
+
+Authentication (API key now, OIDC/JWT later) is separate from authorization. Every authenticated principal carries a set of **permission strings**; handlers only check for these strings.
+
+* Canonical permissions (initial set):
+  * `can_search` — search/list/read assets and tags.
+  * `can_upload` — upload new assets.
+  * `can_update` — edit asset metadata and tags.
+  * `can_delete` — delete assets (soft delete in v1).
+* Endpoint mapping (v1):
+  * `GET /api/assets`, `GET /api/assets/{id}`, `GET /api/tags` → require `can_search`.
+  * `POST /api/assets` → require `can_upload`.
+  * `PATCH /api/assets/{id}` → require `can_update`.
+  * `DELETE /api/assets/{id}` → require `can_delete`.
+  * `/media/{id}/{variant}`:
+    * When `GANACHE_PUBLIC_MEDIA=true` → no auth required.
+    * When `GANACHE_PUBLIC_MEDIA=false` → require at least `can_search`.
+* Future OIDC/JWT integration will map token claims (e.g., `permissions`) into the same string permissions so handlers remain unchanged.
 
 ### Upload safety
 
@@ -207,7 +255,9 @@ All configuration via environment variables (v1):
 * `GANACHE_MAX_PIXELS`
 * `GANACHE_CONTENT_MAX_WIDTH`
 * `GANACHE_THUMB_MAX_WIDTH`
-* `GANACHE_ENABLE_PUBLIC_MEDIA` (true/false)
+* `GANACHE_PUBLIC_MEDIA` (true/false)
+* `GANACHE_AUTH_MODE` (one of: `none`, `apikey`, `oidc`)
+* `GANACHE_API_KEYS_FILE` (optional; path to YAML file defining API keys; used when `GANACHE_AUTH_MODE=apikey`. Defaults to `api-keys.yaml` if unset.)
 * `GANACHE_CORS_ALLOWED_ORIGINS` (comma-separated)
 * `GANACHE_LOG_LEVEL` (optional)
 
@@ -247,9 +297,10 @@ Config values can come from env vars or a local `.env` (auto-loaded).
 
 1. Start services: `docker compose up --build`
 2. Run migrations (with compose DB up): `GANACHE_DB_DSN='ganache:ganache@tcp(localhost:3306)/ganache?parseTime=true&multiStatements=true' make migrate-up`
-3. Upload an image:
+3. Upload an image (with auth disabled or using a valid API key, depending on `GANACHE_AUTH_MODE`):
    ```bash
-   curl -X POST -H "Authorization: Bearer dummy-token" \
+   curl -X POST \
+     -H "X-Api-Key: your-api-key-here" \
      -F "file=@./tests/sample1.jpg" \
      -F "title=Sample Image" \
      -F "tags=test" \
@@ -257,3 +308,19 @@ Config values can come from env vars or a local `.env` (auto-loaded).
    ```
 4. Browse Swagger UI at `http://localhost:8080/swagger`
 5. Run comprehensive HTTP tests: see `tests/smoke.http` and `testing.md`
+
+## CI and releases
+
+- CI (`.github/workflows/ci.yml`): gofmt check, golangci-lint, `go test ./...`, plus `go test -race ./...` on Linux.
+- Releases (`.github/workflows/release.yml`): tag `v*` to trigger GoReleaser using `.goreleaser.yaml`, building `ganache` and `ganache-migrate` for linux/darwin/windows on amd64/arm64, producing archives, checksums, and SBOMs.
+- Signing is optional: set `COSIGN_KEY` secret to sign checksums; otherwise the workflow skips signing.
+- Local dry-run: install GoReleaser and run `goreleaser release --snapshot --clean`.
+- Ship a release: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+
+## API Versioning
+
+- Current API is unversioned and treated as the stable v1 surface.
+- No breaking changes will be made within 1.x; breaking changes will move to `/api/v2/...` only for affected endpoints.
+- Media URLs (`/media/{id}/{variant}`) remain unversioned and stable to avoid breaking embedded assets.
+- Header-based versioning is not used to keep clients simple; paths will carry versions when needed.
+- Deprecations will be noted in release notes/changelog with guidance before removal.

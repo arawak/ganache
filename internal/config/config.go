@@ -10,17 +10,19 @@ import (
 )
 
 const (
-	DefaultBind                 = ":8080"
-	DefaultStorageRoot          = "/srv/ganache"
-	DefaultMaxUploadBytes int64 = 20 * 1024 * 1024
-	DefaultMaxPixels            = 50_000_000
+	DefaultBind                  = ":8080"
+	DefaultStorageRoot           = "/srv/ganache"
+	DefaultMaxUploadBytes  int64 = 20 * 1024 * 1024
+	DefaultMaxPixels             = 50_000_000
+	DefaultContentMaxWidth       = 1600
+	DefaultThumbMaxWidth         = 400
 )
 
 type AuthMode string
 
 const (
 	AuthNone   AuthMode = "none"
-	AuthBearer AuthMode = "bearer"
+	AuthAPIKey AuthMode = "apikey"
 	AuthOIDC   AuthMode = "oidc"
 )
 
@@ -30,8 +32,11 @@ type Config struct {
 	StorageRoot        string
 	MaxUploadBytes     int64
 	MaxPixels          int
+	ContentMaxWidth    int
+	ThumbMaxWidth      int
 	PublicMedia        bool
 	AuthMode           AuthMode
+	APIKeysFile        string
 	CORSAllowedOrigins []string
 	LogLevel           string
 	SwaggerUIPath      string
@@ -46,8 +51,10 @@ func Load() (*Config, error) {
 		StorageRoot:        getenv("GANACHE_STORAGE_ROOT", DefaultStorageRoot),
 		MaxUploadBytes:     getInt64("GANACHE_MAX_UPLOAD_BYTES", DefaultMaxUploadBytes),
 		MaxPixels:          getInt("GANACHE_MAX_PIXELS", DefaultMaxPixels),
+		ContentMaxWidth:    getInt("GANACHE_CONTENT_MAX_WIDTH", DefaultContentMaxWidth),
+		ThumbMaxWidth:      getInt("GANACHE_THUMB_MAX_WIDTH", DefaultThumbMaxWidth),
 		PublicMedia:        getBool("GANACHE_PUBLIC_MEDIA", true),
-		AuthMode:           AuthMode(getenv("GANACHE_AUTH_MODE", string(AuthBearer))),
+		AuthMode:           AuthMode(getenv("GANACHE_AUTH_MODE", string(AuthAPIKey))),
 		CORSAllowedOrigins: splitAndTrim(os.Getenv("GANACHE_CORS_ALLOWED_ORIGINS")),
 		LogLevel:           os.Getenv("GANACHE_LOG_LEVEL"),
 		SwaggerUIPath:      "/swagger",
@@ -55,16 +62,21 @@ func Load() (*Config, error) {
 	}
 
 	cfg.DBDSN = os.Getenv("GANACHE_DB_DSN")
-	if cfg.AuthMode != AuthNone && cfg.DBDSN == "" {
-		// DB is still required; compose will set it automatically.
-		// For non-compose usage, require DB.
+	if cfg.DBDSN == "" {
 		return nil, fmt.Errorf("GANACHE_DB_DSN is required")
 	}
 
 	switch cfg.AuthMode {
-	case AuthNone, AuthBearer, AuthOIDC:
+	case AuthNone, AuthAPIKey, AuthOIDC:
 	default:
 		return nil, fmt.Errorf("invalid GANACHE_AUTH_MODE: %s", cfg.AuthMode)
+	}
+
+	if cfg.AuthMode == AuthAPIKey {
+		cfg.APIKeysFile = getenv("GANACHE_API_KEYS_FILE", "api-keys.yaml")
+		if cfg.APIKeysFile == "" {
+			return nil, fmt.Errorf("GANACHE_API_KEYS_FILE is required when GANACHE_AUTH_MODE=apikey")
+		}
 	}
 
 	return cfg, nil

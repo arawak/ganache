@@ -121,7 +121,10 @@ type Tag struct {
 
 // TagListResponse defines model for TagListResponse.
 type TagListResponse struct {
-	Items []Tag `json:"items"`
+	Items    []Tag `json:"items"`
+	Page     int   `json:"page"`
+	PageSize int   `json:"pageSize"`
+	Total    int   `json:"total"`
 }
 
 // AssetId defines model for AssetId.

@@ -12,12 +12,14 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 
-	"github.com/example/ganache/internal/config"
-	"github.com/example/ganache/internal/httpapi"
-	"github.com/example/ganache/internal/media"
-	"github.com/example/ganache/internal/store"
-	"github.com/example/ganache/migrations"
+	"github.com/arawak/ganache/internal/config"
+	"github.com/arawak/ganache/internal/httpapi"
+	"github.com/arawak/ganache/internal/media"
+	"github.com/arawak/ganache/internal/store"
+	"github.com/arawak/ganache/migrations"
 )
+
+var version = "dev"
 
 func main() {
 	cfg, err := config.Load()
@@ -25,7 +27,16 @@ func main() {
 		panic(err)
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil)).With("version", version)
+
+	var apiKeys *httpapi.APIKeyStore
+	if cfg.AuthMode == config.AuthAPIKey {
+		apiKeys, err = httpapi.LoadAPIKeys(cfg.APIKeysFile)
+		if err != nil {
+			logger.Error("failed to load api keys", "error", err)
+			os.Exit(1)
+		}
+	}
 
 	db, err := sqlx.Open("mysql", cfg.DBDSN)
 	if err != nil {
@@ -43,7 +54,7 @@ func main() {
 
 	storeSvc := store.New(db)
 	mediaMgr := media.NewManager(cfg.StorageRoot)
-	router := httpapi.NewRouter(cfg, storeSvc, mediaMgr, logger)
+	router := httpapi.NewRouter(cfg, storeSvc, mediaMgr, apiKeys, logger)
 
 	srv := &http.Server{Addr: cfg.Bind, Handler: router}
 	go func() {
@@ -58,7 +69,15 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 
+	logger.Info("shutting down gracefully")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = srv.Shutdown(ctx)
+
+	if err := srv.Shutdown(ctx); err != nil {
+		logger.Error("server shutdown error", "error", err)
+	}
+
+	if err := db.Close(); err != nil {
+		logger.Error("database close error", "error", err)
+	}
 }

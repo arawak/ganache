@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Cosign (if key provided)
+        if: ${{ secrets.COSIGN_KEY != '' }}
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Configure GoReleaser args
+        run: |
+          if [ -n "${COSIGN_KEY:-}" ]; then
+            echo "GORELEASER_ARGS=release --clean" >> "$GITHUB_ENV"
+          else
+            echo "GORELEASER_ARGS=release --clean --skip=sign" >> "$GITHUB_ENV"
+          fi
+        env:
+          COSIGN_KEY: ${{ secrets.COSIGN_KEY }}
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: ${{ env.GORELEASER_ARGS }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COSIGN_KEY: ${{ secrets.COSIGN_KEY }}

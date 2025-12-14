@@ -11,9 +11,13 @@ This project includes comprehensive HTTP smoke tests via REST Client / httpyac w
 - File: `tests/smoke.http`
 - Sample images: `tests/sample1.jpg`, `tests/sample2.webp`, `tests/sample3.png`
 - Variables:
-  - `@baseUrl` (default `http://localhost:8080`)
-  - `@token` (any non-empty bearer; defaults to `dummy-token`)
+  - `@baseUrl` (default `http://localhost:8080`; also provided via `http-config.env.json` → `local` env)
+  - `@apiKey` (use the `smoke_tests` key from `api-keys.yaml`; default provided in `http-config.env.json` → `local`)
   - `@greavesAssetId` (set manually after upload for realistic tests)
+
+### Versioning note
+- API is currently unversioned and treated as v1; tests target this stable surface.
+- When a breaking change occurs, new paths will use `/api/v2/...`; media URLs stay unversioned.
 
 ## Test Coverage
 
@@ -94,10 +98,10 @@ httpyac tests/smoke.http --all
 ## Curl alternative (no assertions)
 ```bash
 BASE=http://localhost:8080
-TOKEN="Bearer dummy-token"
+API_KEY="3bc4d464-5b6f-4e07-b208-d00673d9e0f4" # smoke_tests key from api-keys.yaml
 
 # Upload with metadata
-ASSET=$(curl -sf -H "Authorization: $TOKEN" \
+ASSET=$(curl -sf -H "X-Api-Key: $API_KEY" \
   -F file=@tests/sample1.jpg \
   -F title="Justin Greaves celebrates double century" \
   -F caption="Test match photo" \
@@ -107,10 +111,10 @@ ASSET=$(curl -sf -H "Authorization: $TOKEN" \
 ID=$(echo "$ASSET" | jq -r .id)
 
 # Get asset details
-curl -sf -H "Authorization: $TOKEN" "$BASE/api/assets/$ID" | jq
+curl -sf -H "X-Api-Key: $API_KEY" "$BASE/api/assets/$ID" | jq
 
 # Search for cricket photos
-curl -sf -H "Authorization: $TOKEN" "$BASE/api/assets?tag=cricket" | jq
+curl -sf -H "X-Api-Key: $API_KEY" "$BASE/api/assets?tag=cricket" | jq
 
 # Download variants
 curl -sf "$BASE/media/$ID/thumb" -o /tmp/thumb.webp
@@ -125,7 +129,7 @@ go test ./... -v
 ```
 
 ## Notes
-- Auth mode `bearer` only checks that the header is present (not validated)
+- Auth mode `apikey` requires a valid `X-Api-Key` (see `api-keys.yaml` and `GANACHE_API_KEYS_FILE`); `oidc` is reserved for future JWT validation; `none` disables auth for local/dev
 - Storage defaults to `tmp-storage/`; can be configured via `GANACHE_STORAGE_ROOT`
 - Deduplication works via SHA-256 hash; re-uploading returns 409 with existing asset
 - Tags support full-text search across title, caption, and tag names

@@ -20,38 +20,58 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
-	"github.com/example/ganache/internal/config"
-	"github.com/example/ganache/internal/media"
-	"github.com/example/ganache/internal/store"
-	"github.com/example/ganache/internal/swaggerui"
+	"github.com/arawak/ganache/internal/config"
+	"github.com/arawak/ganache/internal/media"
+	"github.com/arawak/ganache/internal/store"
+	"github.com/arawak/ganache/internal/swaggerui"
 )
 
 type Server struct {
-	cfg    *config.Config
-	store  *store.Store
-	media  *media.Manager
-	logger *slog.Logger
+	cfg     *config.Config
+	store   *store.Store
+	media   *media.Manager
+	apiKeys *APIKeyStore
+	logger  *slog.Logger
 }
 
 var (
 	openapiOnce sync.Once
 	openapiData []byte
 	openapiErr  error
+	openapiFile string
 )
 
-func loadOpenAPI() ([]byte, error) {
+func loadOpenAPI(path string) ([]byte, error) {
 	openapiOnce.Do(func() {
-		path := filepath.Clean("openapi.yaml")
-		openapiData, openapiErr = os.ReadFile(path)
+		openapiFile = path
+		if openapiFile == "" {
+			// Try common locations
+			candidates := []string{
+				"openapi.yaml",
+				"/app/openapi.yaml",
+				filepath.Join(filepath.Dir(os.Args[0]), "openapi.yaml"),
+			}
+			for _, candidate := range candidates {
+				if _, err := os.Stat(candidate); err == nil {
+					openapiFile = candidate
+					break
+				}
+			}
+		}
+		if openapiFile == "" {
+			openapiErr = fmt.Errorf("openapi.yaml not found in any expected location")
+			return
+		}
+		openapiData, openapiErr = os.ReadFile(openapiFile)
 	})
 	return openapiData, openapiErr
 }
 
-func NewRouter(cfg *config.Config, st *store.Store, mediaMgr *media.Manager, logger *slog.Logger) http.Handler {
+func NewRouter(cfg *config.Config, st *store.Store, mediaMgr *media.Manager, apiKeys *APIKeyStore, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
 	}
-	s := &Server{cfg: cfg, store: st, media: mediaMgr, logger: logger}
+	s := &Server{cfg: cfg, store: st, media: mediaMgr, apiKeys: apiKeys, logger: logger}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -64,7 +84,7 @@ func NewRouter(cfg *config.Config, st *store.Store, mediaMgr *media.Manager, log
 		c := cors.New(cors.Options{
 			AllowedOrigins:   cfg.CORSAllowedOrigins,
 			AllowedMethods:   []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
-			AllowedHeaders:   []string{"Authorization", "Content-Type", "Accept"},
+			AllowedHeaders:   []string{"Authorization", "Content-Type", "Accept", "X-Api-Key"},
 			AllowCredentials: true,
 		})
 		r.Use(c.Handler)
@@ -80,18 +100,27 @@ func NewRouter(cfg *config.Config, st *store.Store, mediaMgr *media.Manager, log
 	}}
 
 	r.Group(func(r chi.Router) {
-		r.Use(s.authMiddleware(false))
-		r.Get("/api/assets", wrapper.SearchAssets)
-		r.Post("/api/assets", wrapper.UploadAsset)
-		r.Delete("/api/assets/{id}", wrapper.DeleteAsset)
-		r.Get("/api/assets/{id}", wrapper.GetAsset)
-		r.Patch("/api/assets/{id}", wrapper.UpdateAsset)
-		r.Get("/api/tags", wrapper.ListTags)
+		r.Use(s.authMiddleware())
+		r.With(s.requirePermissions(PermCanSearch)).Get("/api/assets", wrapper.SearchAssets)
+		r.With(s.requirePermissions(PermCanUpload)).Post("/api/assets", wrapper.UploadAsset)
+		r.With(s.requirePermissions(PermCanDelete)).Delete("/api/assets/{id}", wrapper.DeleteAsset)
+		r.With(s.requirePermissions(PermCanSearch)).Get("/api/assets/{id}", wrapper.GetAsset)
+		r.With(s.requirePermissions(PermCanUpdate)).Patch("/api/assets/{id}", wrapper.UpdateAsset)
+		r.With(s.requirePermissions(PermCanSearch)).Get("/api/tags", wrapper.ListTags)
 	})
 
 	r.Group(func(r chi.Router) {
 		if !cfg.PublicMedia {
-			r.Use(s.authMiddleware(true))
+			r.Use(s.authMiddleware())
+			r.Use(s.requirePermissions(PermCanSearch))
+		}
+		r.Get("/media/{id}/{variant}", wrapper.GetMediaVariant)
+	})
+
+	r.Group(func(r chi.Router) {
+		if !cfg.PublicMedia {
+			r.Use(s.authMiddleware())
+			r.Use(s.requirePermissions(PermCanSearch))
 		}
 		r.Get("/media/{id}/{variant}", wrapper.GetMediaVariant)
 	})
@@ -99,22 +128,30 @@ func NewRouter(cfg *config.Config, st *store.Store, mediaMgr *media.Manager, log
 	return r
 }
 
-func (s *Server) authMiddleware(force bool) func(http.Handler) http.Handler {
+func (s *Server) authMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if force {
-				// reserved for future stricter modes
-			}
 			switch s.cfg.AuthMode {
 			case config.AuthNone:
 				next.ServeHTTP(w, r)
 				return
-			case config.AuthBearer:
-				if token := bearerToken(r.Header.Get("Authorization")); token != "" {
-					next.ServeHTTP(w, r)
+			case config.AuthAPIKey:
+				apiKey := strings.TrimSpace(r.Header.Get("X-Api-Key"))
+				if apiKey == "" {
+					writeError(w, http.StatusUnauthorized, "unauthorized", "missing api key", nil)
 					return
 				}
-				writeError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token", nil)
+				if s.apiKeys == nil {
+					writeError(w, http.StatusInternalServerError, "internal", "api key store not initialized", nil)
+					return
+				}
+				entry, ok := s.apiKeys.Lookup(apiKey)
+				if !ok {
+					writeError(w, http.StatusUnauthorized, "unauthorized", "invalid api key", nil)
+					return
+				}
+				principal := newPrincipalFromAPIKey(entry)
+				next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))
 				return
 			case config.AuthOIDC:
 				writeError(w, http.StatusNotImplemented, "not_implemented", "oidc auth mode is not implemented yet", nil)
@@ -127,15 +164,40 @@ func (s *Server) authMiddleware(force bool) func(http.Handler) http.Handler {
 	}
 }
 
+func (s *Server) requirePermissions(perms ...string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if s.cfg.AuthMode == config.AuthNone {
+				next.ServeHTTP(w, r)
+				return
+			}
+			principal, ok := PrincipalFromContext(r.Context())
+			if !ok {
+				writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required", nil)
+				return
+			}
+			for _, perm := range perms {
+				if !principal.HasPermission(perm) {
+					writeError(w, http.StatusForbidden, "forbidden", "insufficient permissions", nil)
+					return
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func (s *Server) serveOpenAPI(w http.ResponseWriter, _ *http.Request) {
-	data, err := loadOpenAPI()
+	data, err := loadOpenAPI("")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "unable to load openapi.yaml", map[string]any{"error": err.Error()})
 		return
 	}
 	w.Header().Set("Content-Type", "application/yaml")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		s.logger.Error("failed to write openapi response", "error", err)
+	}
 }
 
 func (s *Server) GetHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -157,15 +219,28 @@ func (s *Server) GetReadyz(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) SearchAssets(w http.ResponseWriter, r *http.Request, params SearchAssetsParams) {
+	pageSize := derefInt(params.PageSize, 30)
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+
+	page := derefInt(params.Page, 1)
+	if page < 1 {
+		page = 1
+	}
+
 	sp := store.SearchParams{
 		Query:          getStringPtr(params.Q),
 		Tags:           derefStringSlice(params.Tag),
-		Page:           derefInt(params.Page, 1),
-		PageSize:       derefInt(params.PageSize, 30),
+		Page:           page,
+		PageSize:       pageSize,
 		Sort:           string(derefSort(params.Sort)),
 		IncludeDeleted: derefBool(params.IncludeDeleted, false),
 	}
-	s.logger.Info("search", "query", sp.Query, "tags", sp.Tags, "page", sp.Page, "pageSize", sp.PageSize, "sort", sp.Sort)
+	s.logger.Debug("search", "query", sp.Query, "tags", sp.Tags, "page", sp.Page, "pageSize", sp.PageSize, "sort", sp.Sort)
 	assets, total, err := s.store.SearchAssets(r.Context(), sp)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "failed to search", map[string]any{"error": err.Error()})
@@ -248,7 +323,7 @@ func (s *Server) UploadAsset(w http.ResponseWriter, r *http.Request) {
 		SHA256:           save.SHA256,
 	}
 
-	s.logger.Info("upload asset", "title", assetInput.Title, "tags", assetInput.Tags, "tagCount", len(assetInput.Tags))
+	s.logger.Debug("upload asset", "title", assetInput.Title, "tagCount", len(assetInput.Tags))
 
 	asset, err := s.store.CreateAsset(r.Context(), assetInput)
 	if err != nil {
@@ -267,11 +342,11 @@ func (s *Server) UploadAsset(w http.ResponseWriter, r *http.Request) {
 func (s *Server) GetAsset(w http.ResponseWriter, r *http.Request, id AssetId) {
 	asset, err := s.store.GetAsset(r.Context(), id, false)
 	if err != nil {
-		status := http.StatusInternalServerError
 		if errors.Is(err, store.ErrNotFound) {
-			status = http.StatusNotFound
+			writeError(w, http.StatusNotFound, "not_found", "asset not found", nil)
+			return
 		}
-		writeError(w, status, "not_found", "asset not found", nil)
+		writeError(w, http.StatusInternalServerError, "internal", "failed to retrieve asset", map[string]any{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, s.toAPIAsset(asset))
@@ -283,6 +358,29 @@ func (s *Server) UpdateAsset(w http.ResponseWriter, r *http.Request, id AssetId)
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid json", nil)
 		return
 	}
+
+	// Validate field lengths
+	if payload.Title != nil && len(*payload.Title) > 255 {
+		writeError(w, http.StatusBadRequest, "bad_request", "title exceeds maximum length of 255 characters", nil)
+		return
+	}
+	if payload.Credit != nil && len(*payload.Credit) > 255 {
+		writeError(w, http.StatusBadRequest, "bad_request", "credit exceeds maximum length of 255 characters", nil)
+		return
+	}
+	if payload.Source != nil && len(*payload.Source) > 255 {
+		writeError(w, http.StatusBadRequest, "bad_request", "source exceeds maximum length of 255 characters", nil)
+		return
+	}
+	if payload.Tags != nil {
+		for _, tag := range *payload.Tags {
+			if len(tag) > 255 {
+				writeError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("tag '%s' exceeds maximum length of 255 characters", tag), nil)
+				return
+			}
+		}
+	}
+
 	upd := store.AssetUpdate{
 		Title:      payload.Title,
 		Caption:    payload.Caption,
@@ -293,11 +391,11 @@ func (s *Server) UpdateAsset(w http.ResponseWriter, r *http.Request, id AssetId)
 	}
 	asset, err := s.store.UpdateAsset(r.Context(), id, upd)
 	if err != nil {
-		status := http.StatusInternalServerError
 		if errors.Is(err, store.ErrNotFound) {
-			status = http.StatusNotFound
+			writeError(w, http.StatusNotFound, "not_found", "asset not found", nil)
+			return
 		}
-		writeError(w, status, "update_failed", "could not update asset", map[string]any{"error": err.Error()})
+		writeError(w, http.StatusInternalServerError, "internal", "failed to update asset", map[string]any{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, s.toAPIAsset(asset))
@@ -305,11 +403,11 @@ func (s *Server) UpdateAsset(w http.ResponseWriter, r *http.Request, id AssetId)
 
 func (s *Server) DeleteAsset(w http.ResponseWriter, r *http.Request, id AssetId) {
 	if err := s.store.DeleteAsset(r.Context(), id); err != nil {
-		status := http.StatusInternalServerError
 		if errors.Is(err, store.ErrNotFound) {
-			status = http.StatusNotFound
+			writeError(w, http.StatusNotFound, "not_found", "asset not found", nil)
+			return
 		}
-		writeError(w, status, "delete_failed", "could not delete asset", map[string]any{"error": err.Error()})
+		writeError(w, http.StatusInternalServerError, "internal", "failed to delete asset", map[string]any{"error": err.Error()})
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -317,13 +415,24 @@ func (s *Server) DeleteAsset(w http.ResponseWriter, r *http.Request, id AssetId)
 
 func (s *Server) ListTags(w http.ResponseWriter, r *http.Request, params ListTagsParams) {
 	page := derefInt(params.Page, 1)
+	if page < 1 {
+		page = 1
+	}
+
 	size := derefInt(params.PageSize, 100)
-	tags, err := s.store.ListTags(r.Context(), getStringPtr(params.Prefix), page, size)
+	if size < 1 {
+		size = 1
+	}
+	if size > 500 {
+		size = 500
+	}
+
+	tags, total, err := s.store.ListTags(r.Context(), getStringPtr(params.Prefix), page, size)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "failed to list tags", map[string]any{"error": err.Error()})
 		return
 	}
-	resp := TagListResponse{Items: make([]Tag, 0, len(tags))}
+	resp := TagListResponse{Items: make([]Tag, 0, len(tags)), Page: page, PageSize: size, Total: total}
 	for _, t := range tags {
 		resp.Items = append(resp.Items, Tag{Name: t})
 	}
@@ -379,11 +488,13 @@ func (s *Server) GetMediaVariant(w http.ResponseWriter, r *http.Request, id Asse
 		cache = "public, max-age=31536000, immutable"
 	}
 	w.Header().Set("Cache-Control", cache)
-	w.WriteHeader(http.StatusOK)
 	if info != nil {
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	}
-	_, _ = io.Copy(w, file)
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.Copy(w, file); err != nil {
+		s.logger.Error("failed to copy file to response", "error", err, "path", path)
+	}
 }
 
 func (s *Server) toAPIAsset(a *store.Asset) Asset {
@@ -478,17 +589,6 @@ func formValue(values map[string][]string, key string) string {
 		return ""
 	}
 	return vals[0]
-}
-
-func bearerToken(header string) string {
-	if header == "" {
-		return ""
-	}
-	parts := strings.SplitN(header, " ", 2)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
-		return ""
-	}
-	return strings.TrimSpace(parts[1])
 }
 
 func guessExt(filename string) string {
