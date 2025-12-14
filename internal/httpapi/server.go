@@ -268,14 +268,12 @@ func (s *Server) UploadAsset(w http.ResponseWriter, r *http.Request) {
 
 	save, err := s.media.Save(r.Context(), file, header.Filename, s.cfg.MaxUploadBytes, s.cfg.MaxPixels)
 	if err != nil {
-		status := http.StatusBadRequest
+		status := http.StatusInternalServerError
 		switch err {
 		case media.ErrTooLarge:
 			status = http.StatusBadRequest
 		case media.ErrInvalidImage:
 			status = http.StatusBadRequest
-		default:
-			status = http.StatusInternalServerError
 		}
 		writeError(w, status, "upload_failed", err.Error(), nil)
 		return

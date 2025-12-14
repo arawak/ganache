@@ -44,7 +44,7 @@ func (s *Store) CreateAsset(ctx context.Context, in AssetCreate) (*Asset, error)
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	query := `INSERT INTO asset (title, caption, credit, source, usage_notes, width, height, bytes, mime, original_filename, sha256, tag_text)
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -124,7 +124,7 @@ func (s *Store) UpdateAsset(ctx context.Context, id int64, upd AssetUpdate) (*As
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	setParts := []string{}
 	args := []any{}
