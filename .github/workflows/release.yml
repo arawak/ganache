@@ -34,10 +34,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install Cosign (if key provided)
-        if: ${{ secrets.COSIGN_KEY != '' }}
-        uses: sigstore/cosign-installer@v3.7.0
-
       - name: Configure GoReleaser args
         run: |
           if [ -n "${COSIGN_KEY:-}" ]; then
@@ -45,6 +41,12 @@ jobs:
           else
             echo "GORELEASER_ARGS=release --clean --skip=sign" >> "$GITHUB_ENV"
           fi
+        env:
+          COSIGN_KEY: ${{ secrets.COSIGN_KEY }}
+
+      - name: Install Cosign (if key provided)
+        if: ${{ env.COSIGN_KEY != '' }}
+        uses: sigstore/cosign-installer@v3.7.0
         env:
           COSIGN_KEY: ${{ secrets.COSIGN_KEY }}
 
