@@ -1,6 +1,7 @@
 BINARY ?= ganache
 PKG := github.com/example/ganache
-LDFLAGS ?=
+VERSION := $(shell cat VERSION)
+LDFLAGS ?= -X main.version=$(VERSION)
 
 GANACHE_DB_DSN ?= root:root@tcp(localhost:3306)/ganache?parseTime=true&multiStatements=true
 GANACHE_STORAGE_ROOT ?= $(PWD)/.data/storage
