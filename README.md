@@ -309,6 +309,29 @@ Config values can come from env vars or a local `.env` (auto-loaded).
 4. Browse Swagger UI at `http://localhost:8080/swagger`
 5. Run comprehensive HTTP tests: see `tests/smoke.http` and `testing.md`
 
+## Official Docker image
+
+A lightweight distroless image is published to GitHub Container Registry for every tagged release:
+
+```
+docker pull ghcr.io/arawak/ganache:latest
+```
+
+- Tags include `latest`, the semantic version (e.g., `1.2.3`), and the exact git tag (e.g., `v1.2.3`).
+- The image runs as a non-root user and expects external MariaDB + persistent storage.
+- Mount storage and configure the DSN when running locally:
+
+```bash
+docker run --rm \
+  -e GANACHE_DB_DSN="ganache:ganache@tcp(host.docker.internal:3306)/ganache?parseTime=true&multiStatements=true" \
+  -e GANACHE_AUTH_MODE=apikey \
+  -e GANACHE_API_KEYS_FILE=/config/api-keys.yaml \
+  -v $(pwd)/storage:/data/storage \
+  -v $(pwd)/api-keys.yaml:/config/api-keys.yaml:ro \
+  -p 8080:8080 \
+  ghcr.io/arawak/ganache:latest
+```
+
 ## CI and releases
 
 - CI (`.github/workflows/ci.yml`): gofmt check, golangci-lint, `go test ./...`, plus `go test -race ./...` on Linux.
