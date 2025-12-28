@@ -2,9 +2,11 @@
 /dist/
 /data/
 /.data/
+/tmp-storage/
 /coverage.out
 *.test
 .idea/
 .vscode/
 .DS_Store
+.env
 vendor/

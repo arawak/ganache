@@ -13,6 +13,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
     -o /out/ganache ./cmd/ganache
 
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags "-s -w -X main.version=${VERSION}" \
+    -trimpath \
+    -o /out/ganache-migrate ./cmd/migrate
+
 RUN cp openapi.yaml /out/openapi.yaml && \
     cp -r migrations /out/migrations
 
@@ -21,6 +26,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 
 COPY --from=builder /out/ganache /app/ganache
+COPY --from=builder /out/ganache-migrate /app/ganache-migrate
 COPY --from=builder /out/openapi.yaml /app/openapi.yaml
 COPY --from=builder /out/migrations /app/migrations
 

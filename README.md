@@ -291,23 +291,48 @@ Recommended reverse proxy behavior:
 * Pluggable storage backend (S3-compatible)
 * Access-controlled private assets (signed URLs)
 
-## Quickstart
+## Quickstart (Docker Compose)
 
-Config values can come from env vars or a local `.env` (auto-loaded).
+Ganache can be run entirely via Docker Compose. Put a `.env` file in the repo root; Compose will load it and Ganache will also auto-load it at startup.
 
-1. Start services: `docker compose up --build`
-2. Run migrations (with compose DB up): `GANACHE_DB_DSN='ganache:ganache@tcp(localhost:3306)/ganache?parseTime=true&multiStatements=true' make migrate-up`
-3. Upload an image (with auth disabled or using a valid API key, depending on `GANACHE_AUTH_MODE`):
+1. Create `.env`:
+   ```env
+   # MariaDB (used by docker-compose.yml)
+   MARIADB_ROOT_PASSWORD=root
+   MARIADB_DATABASE=ganache
+   MARIADB_USER=ganache
+   MARIADB_PASSWORD=ganache
+
+   # Ganache
+   GANACHE_DB_DSN=ganache:ganache@tcp(mariadb:3306)/ganache?parseTime=true&multiStatements=true
+   GANACHE_AUTH_MODE=none
+   GANACHE_PUBLIC_MEDIA=true
+
+   # Optional (defaults shown)
+   # GANACHE_BIND=:8080
+   # GANACHE_STORAGE_ROOT=/data/storage
+   ```
+2. Build the image: `docker compose build`
+3. Start MariaDB: `docker compose up -d mariadb`
+4. Run migrations: `docker compose --profile tools run --rm migrate`
+   - Roll back: `docker compose --profile tools run --rm migrate -dir=down`
+5. Start Ganache: `docker compose up -d ganache`
+6. Upload an image:
    ```bash
    curl -X POST \
-     -H "X-Api-Key: your-api-key-here" \
      -F "file=@./tests/sample1.jpg" \
      -F "title=Sample Image" \
      -F "tags=test" \
      http://localhost:8080/api/assets
    ```
-4. Browse Swagger UI at `http://localhost:8080/swagger`
-5. Run comprehensive HTTP tests: see `tests/smoke.http` and `testing.md`
+   - If `GANACHE_AUTH_MODE=apikey`, add `-H "X-Api-Key: <your key>"`.
+7. Browse Swagger UI at `http://localhost:8080/swagger`
+
+Notes:
+
+- Data is persisted to `./.data/mariadb` (DB) and `./.data/storage` (uploads/variants).
+- To use API keys, set `GANACHE_AUTH_MODE=apikey` and `GANACHE_API_KEYS_FILE=/config/api-keys.yaml` and edit `api-keys.yaml` (mounted read-only in `docker-compose.yml`).
+- Stop everything with `docker compose down`.
 
 ## Official Docker image
 

@@ -5,17 +5,45 @@ services:
     ports:
       - "3306:3306"
     environment:
-      MARIADB_ROOT_PASSWORD: root
-      MARIADB_DATABASE: ganache
-      MARIADB_USER: ganache
-      MARIADB_PASSWORD: ganache
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-root}
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-ganache}
+      MARIADB_USER: ${MARIADB_USER:-ganache}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-ganache}
     volumes:
       - ./.data/mariadb:/var/lib/mysql
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MARIADB_ROOT_PASSWORD:-root}"]
       interval: 5s
       timeout: 5s
       start_period: 15s
       retries: 20
 
+  ganache:
+    build: .
+    image: ganache:local
+    container_name: ganache
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    volumes:
+      - ./.data/storage:/data/storage
+      - ./api-keys.yaml:/config/api-keys.yaml:ro
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  migrate:
+    build: .
+    image: ganache:local
+    profiles: ["tools"]
+    env_file:
+      - .env
+    entrypoint: ["/app/ganache-migrate"]
+    command: ["-dir=up"]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    restart: "no"
