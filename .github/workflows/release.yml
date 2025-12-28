@@ -44,6 +44,7 @@ jobs:
         env:
           COSIGN_KEY: ${{ secrets.COSIGN_KEY }}
 
+
       - name: Install Cosign (if key provided)
         if: ${{ env.COSIGN_KEY != '' }}
         uses: sigstore/cosign-installer@v3.7.0
