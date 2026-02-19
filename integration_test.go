@@ -11,6 +11,7 @@ import (
 	"image/color"
 	"image/png"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -41,7 +42,8 @@ func startMaria(t *testing.T, ctx context.Context) (testcontainers.Container, st
 		Image:        "mariadb:11.4",
 		Env:          map[string]string{"MARIADB_ROOT_PASSWORD": "root", "MARIADB_DATABASE": "ganache", "MARIADB_USER": "ganache", "MARIADB_PASSWORD": "ganache"},
 		ExposedPorts: []string{"3306/tcp"},
-		WaitingFor:   wait.ForListeningPort("3306/tcp").WithStartupTimeout(60 * time.Second),
+		WaitingFor: wait.ForExec([]string{"mariadb", "-u", "ganache", "-pganache", "-e", "SELECT 1"}).
+			WithStartupTimeout(60 * time.Second),
 	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{ContainerRequest: req, Started: true})
 	if err != nil {
@@ -90,7 +92,8 @@ func TestEndToEnd(t *testing.T) {
 	}
 	st := store.New(db)
 	mediaMgr := media.NewManager(root)
-	ts := httptest.NewServer(httpapi.NewRouter(cfg, st, mediaMgr, nil))
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ts := httptest.NewServer(httpapi.NewRouter(cfg, st, mediaMgr, nil, logger))
 	t.Cleanup(ts.Close)
 
 	assetID := uploadAndValidate(t, ts.URL+"/api/assets")
@@ -271,5 +274,145 @@ func readyz(t *testing.T, url string) {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("readyz status %d body %s", resp.StatusCode, string(body))
+	}
+}
+
+func TestReuploadDeletedAsset(t *testing.T) {
+	ctx := context.Background()
+
+	container, dsn := startMaria(t, ctx)
+	t.Cleanup(func() { _ = container.Terminate(ctx) })
+
+	if err := migrations.Up(dsn); err != nil {
+		t.Fatalf("migrations failed: %v", err)
+	}
+
+	db, err := sqlx.Connect("mysql", dsn)
+	if err != nil {
+		t.Fatalf("db connect: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	root := t.TempDir()
+	cfg := &config.Config{
+		Bind:               ":0",
+		DBDSN:              dsn,
+		StorageRoot:        root,
+		MaxUploadBytes:     config.DefaultMaxUploadBytes,
+		MaxPixels:          config.DefaultMaxPixels,
+		PublicMedia:        true,
+		AuthMode:           config.AuthNone,
+		CORSAllowedOrigins: nil,
+		SwaggerUIPath:      "/swagger",
+		OpenAPIPath:        "/openapi.yaml",
+	}
+	st := store.New(db)
+	mediaMgr := media.NewManager(root)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ts := httptest.NewServer(httpapi.NewRouter(cfg, st, mediaMgr, nil, logger))
+	t.Cleanup(ts.Close)
+
+	// Create a test image with specific pixel values to ensure consistent SHA256
+	img := image.NewRGBA(image.Rect(0, 0, 10, 10))
+	for y := 0; y < 10; y++ {
+		for x := 0; x < 10; x++ {
+			img.Set(x, y, color.RGBA{R: 42, G: 137, B: 255, A: 255})
+		}
+	}
+
+	// Step 1: Upload the image
+	var buf1 bytes.Buffer
+	mw1 := multipart.NewWriter(&buf1)
+	w1, _ := mw1.CreateFormFile("file", "test.png")
+	png.Encode(w1, img)
+	_ = mw1.WriteField("title", "First Upload")
+	mw1.Close()
+
+	req1, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/assets", &buf1)
+	req1.Header.Set("Content-Type", mw1.FormDataContentType())
+	resp1, err := http.DefaultClient.Do(req1)
+	if err != nil {
+		t.Fatalf("first upload: %v", err)
+	}
+	defer resp1.Body.Close()
+	if resp1.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp1.Body)
+		t.Fatalf("first upload status %d body %s", resp1.StatusCode, string(body))
+	}
+	var asset1 httpapi.Asset
+	if err := json.NewDecoder(resp1.Body).Decode(&asset1); err != nil {
+		t.Fatalf("decode first asset: %v", err)
+	}
+	originalID := asset1.Id
+
+	// Step 2: Delete the asset
+	delReq, _ := http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/api/assets/%d", ts.URL, originalID), nil)
+	delResp, err := http.DefaultClient.Do(delReq)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	defer delResp.Body.Close()
+	if delResp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(delResp.Body)
+		t.Fatalf("delete status %d body %s", delResp.StatusCode, string(body))
+	}
+
+	// Step 3: Re-upload the same image
+	var buf2 bytes.Buffer
+	mw2 := multipart.NewWriter(&buf2)
+	w2, _ := mw2.CreateFormFile("file", "test.png")
+	png.Encode(w2, img)
+	_ = mw2.WriteField("title", "Reuploaded Asset")
+	_ = mw2.WriteField("caption", "New caption")
+	mw2.Close()
+
+	req2, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/assets", &buf2)
+	req2.Header.Set("Content-Type", mw2.FormDataContentType())
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("reupload: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	// Should return 201 Created, not 409 Conflict
+	if resp2.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("reupload expected 201 Created, got status %d body %s", resp2.StatusCode, string(body))
+	}
+
+	var asset2 httpapi.Asset
+	if err := json.NewDecoder(resp2.Body).Decode(&asset2); err != nil {
+		t.Fatalf("decode reuploaded asset: %v", err)
+	}
+
+	// Step 4: Verify the asset was undeleted (same ID, no deletedAt)
+	if asset2.Id != originalID {
+		t.Fatalf("expected same asset ID %d, got %d", originalID, asset2.Id)
+	}
+	if asset2.DeletedAt != nil {
+		t.Fatalf("expected deletedAt to be nil, got %v", asset2.DeletedAt)
+	}
+	if asset2.Title != "Reuploaded Asset" {
+		t.Fatalf("expected title 'Reuploaded Asset', got %q", asset2.Title)
+	}
+	if asset2.Caption != "New caption" {
+		t.Fatalf("expected caption 'New caption', got %q", asset2.Caption)
+	}
+
+	// Step 5: Verify the asset is visible in search
+	searchResp, err := http.Get(ts.URL + "/api/assets?q=Reuploaded")
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	defer searchResp.Body.Close()
+	var searchRes httpapi.AssetSearchResponse
+	if err := json.NewDecoder(searchResp.Body).Decode(&searchRes); err != nil {
+		t.Fatalf("decode search: %v", err)
+	}
+	if searchRes.Total == 0 {
+		t.Fatalf("reuploaded asset not found in search results")
+	}
+	if searchRes.Items[0].Id != originalID {
+		t.Fatalf("search returned wrong asset ID")
 	}
 }
