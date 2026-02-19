@@ -4,7 +4,7 @@ info:
   description: >
     Ganache is a lightweight media catalog + image-serving service. This API supports
     uploading, annotating, organizing, searching, and serving image assets.
-  version: 0.1.0
+  version: 0.1.1
 servers:
   - url: /
 tags:
