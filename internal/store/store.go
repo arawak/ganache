@@ -57,6 +57,17 @@ func (s *Store) CreateAsset(ctx context.Context, in AssetCreate) (*Asset, error)
 		if isDuplicate(err) {
 			existing, getErr := s.getAssetByHash(ctx, tx, in.SHA256)
 			if getErr == nil {
+				// If asset was soft-deleted, undelete and update it
+				if existing.DeletedAt != nil {
+					asset, err := s.undeleteAndUpdateTx(ctx, tx, existing.ID, in)
+					if err != nil {
+						return nil, err
+					}
+					if err := tx.Commit(); err != nil {
+						return nil, err
+					}
+					return asset, nil
+				}
 				return existing, ErrDuplicate
 			}
 			return nil, ErrDuplicate
@@ -84,6 +95,29 @@ func (s *Store) CreateAsset(ctx context.Context, in AssetCreate) (*Asset, error)
 
 func (s *Store) getAssetByHash(ctx context.Context, tx *sqlx.Tx, sha string) (*Asset, error) {
 	return s.fetchAsset(ctx, tx, "sha256 = ?", sha)
+}
+
+func (s *Store) undeleteAndUpdateTx(ctx context.Context, tx *sqlx.Tx, id int64, in AssetCreate) (*Asset, error) {
+	tags := NormalizeTags(in.Tags)
+	tagText := TagText(tags)
+
+	query := `UPDATE asset SET 
+		title = ?, caption = ?, credit = ?, source = ?, usage_notes = ?,
+		original_filename = ?, tag_text = ?, deleted_at = NULL, updated_at = NOW()
+		WHERE id = ?`
+	_, err := tx.ExecContext(ctx, query,
+		in.Title, in.Caption, in.Credit, in.Source, in.UsageNotes,
+		in.OriginalFilename, tagText, id,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.replaceTagsTx(ctx, tx, id, tags, tagText); err != nil {
+		return nil, err
+	}
+
+	return s.getAssetByID(ctx, tx, id)
 }
 
 func (s *Store) getAssetByID(ctx context.Context, tx *sqlx.Tx, id int64) (*Asset, error) {
