@@ -56,7 +56,10 @@ func (m *Manager) Save(ctx context.Context, r io.Reader, filename string, maxByt
 
 	lim := &io.LimitedReader{R: r, N: maxBytes + 1}
 	br := bufio.NewReader(lim)
-	peek, _ := br.Peek(8192)
+	peek, peekErr := br.Peek(8192)
+	if peekErr != nil && !errors.Is(peekErr, io.EOF) {
+		return nil, fmt.Errorf("failed to peek for MIME detection: %w", peekErr)
+	}
 	mimeType := http.DetectContentType(peek)
 
 	tmp, err := os.CreateTemp(m.root, "upload-*")
@@ -74,7 +77,7 @@ func (m *Manager) Save(ctx context.Context, r io.Reader, filename string, maxByt
 	if err != nil {
 		return nil, err
 	}
-	if lim.N < 0 || written > maxBytes {
+	if written > maxBytes {
 		return nil, ErrTooLarge
 	}
 
@@ -106,16 +109,19 @@ func (m *Manager) Save(ctx context.Context, r io.Reader, filename string, maxByt
 		return nil, err
 	}
 
-	// Try to rename first (fast path)
+	var renamed bool
 	if err := os.Rename(tmp.Name(), origPath); err != nil {
-		// If rename fails, try copy as fallback (handles cross-device moves)
 		if copyErr := copyFile(tmp.Name(), origPath); copyErr != nil {
-			// If both rename and copy fail, return the original error
 			return nil, fmt.Errorf("failed to move file to destination: rename failed (%w), copy failed (%v)", err, copyErr)
 		}
+	} else {
+		renamed = true
 	}
 
 	if err := m.generateVariants(origPath, shaHex); err != nil {
+		if renamed {
+			os.Remove(origPath)
+		}
 		return nil, err
 	}
 

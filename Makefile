@@ -3,7 +3,7 @@ PKG := github.com/example/ganache
 VERSION := $(shell cat VERSION)
 LDFLAGS ?= -X main.version=$(VERSION)
 
-GANACHE_DB_DSN ?= root:root@tcp(localhost:3306)/ganache?parseTime=true&multiStatements=true
+GANACHE_DB_DSN ?= root:root@tcp(localhost:3306)/ganache?parseTime=true
 GANACHE_STORAGE_ROOT ?= $(PWD)/.data/storage
 GANACHE_BIND ?= :8080
 GANACHE_AUTH_MODE ?= none

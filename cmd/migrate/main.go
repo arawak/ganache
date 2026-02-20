@@ -18,17 +18,17 @@ func main() {
 		fmt.Println("GANACHE_DB_DSN is required")
 		os.Exit(1)
 	}
-	dir := flag.String("dir", "up", "migration direction: up or down")
+	direction := flag.String("direction", "up", "migration direction: up or down")
 	flag.Parse()
 
 	var err error
-	switch *dir {
+	switch *direction {
 	case "up":
 		err = migrations.Up(dsn)
 	case "down":
 		err = migrations.Down(dsn)
 	default:
-		err = fmt.Errorf("unknown direction: %s", *dir)
+		err = fmt.Errorf("unknown direction: %s", *direction)
 	}
 	if err != nil {
 		fmt.Println("migration error:", err)

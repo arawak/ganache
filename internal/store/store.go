@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -26,10 +27,6 @@ type Store struct {
 
 func New(db *sqlx.DB) *Store {
 	return &Store{db: db}
-}
-
-func (s *Store) DB() *sqlx.DB {
-	return s.db
 }
 
 func (s *Store) Ping(ctx context.Context) error {
@@ -159,6 +156,14 @@ func (s *Store) UpdateAsset(ctx context.Context, id int64, upd AssetUpdate) (*As
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	existing, err := s.getAssetByID(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+	if existing.DeletedAt != nil {
+		return nil, ErrNotFound
+	}
 
 	setParts := []string{}
 	args := []any{}
@@ -396,7 +401,11 @@ func isDuplicate(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(strings.ToLower(err.Error()), "duplicate") || strings.Contains(strings.ToLower(err.Error()), "unique")
+	var mysqlErr *mysql.MySQLError
+	if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+		return true
+	}
+	return false
 }
 
 func (s *Store) ListTags(ctx context.Context, prefix string, page, pageSize int) ([]string, int, error) {
@@ -411,8 +420,9 @@ func (s *Store) ListTags(ctx context.Context, prefix string, page, pageSize int)
 	where := ""
 	args := []any{}
 	if prefix != "" {
-		where = "WHERE name LIKE ?"
-		args = append(args, prefix+"%")
+		escaped := escapeLike(prefix)
+		where = "WHERE name LIKE ? ESCAPE '\\'"
+		args = append(args, escaped+"%")
 	}
 
 	countQuery := "SELECT COUNT(*) FROM tag " + where
@@ -428,4 +438,11 @@ func (s *Store) ListTags(ctx context.Context, prefix string, page, pageSize int)
 		return nil, 0, err
 	}
 	return tags, total, nil
+}
+
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "%", "\\%")
+	s = strings.ReplaceAll(s, "_", "\\_")
+	return s
 }

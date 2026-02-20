@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -8,10 +10,20 @@ import (
 	"github.com/arawak/ganache/internal/config"
 )
 
+func testAPIKeyStore(keys map[string]*APIKey) *APIKeyStore {
+	store := &APIKeyStore{byHash: make(map[string]*APIKey)}
+	for key, entry := range keys {
+		keyHash := sha256.Sum256([]byte(key))
+		hashStr := hex.EncodeToString(keyHash[:])
+		store.byHash[hashStr] = entry
+	}
+	return store
+}
+
 func TestAuthMiddlewareAPIKeySuccess(t *testing.T) {
-	store := &APIKeyStore{byKey: map[string]*APIKey{
-		"secret": {ID: "test", Permissions: []string{PermCanSearch}},
-	}}
+	store := testAPIKeyStore(map[string]*APIKey{
+		"secret": {ID: "test", Key: "secret", Permissions: []string{PermCanSearch}},
+	})
 	s := &Server{cfg: &config.Config{AuthMode: config.AuthAPIKey}, apiKeys: store}
 
 	nextCalled := false
@@ -34,7 +46,7 @@ func TestAuthMiddlewareAPIKeySuccess(t *testing.T) {
 }
 
 func TestAuthMiddlewareMissingKey(t *testing.T) {
-	s := &Server{cfg: &config.Config{AuthMode: config.AuthAPIKey}, apiKeys: &APIKeyStore{byKey: map[string]*APIKey{}}}
+	s := &Server{cfg: &config.Config{AuthMode: config.AuthAPIKey}, apiKeys: &APIKeyStore{byHash: map[string]*APIKey{}}}
 	h := s.authMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 
 	rec := httptest.NewRecorder()
@@ -48,7 +60,7 @@ func TestAuthMiddlewareMissingKey(t *testing.T) {
 }
 
 func TestAuthMiddlewareInvalidKey(t *testing.T) {
-	s := &Server{cfg: &config.Config{AuthMode: config.AuthAPIKey}, apiKeys: &APIKeyStore{byKey: map[string]*APIKey{}}}
+	s := &Server{cfg: &config.Config{AuthMode: config.AuthAPIKey}, apiKeys: &APIKeyStore{byHash: map[string]*APIKey{}}}
 	h := s.authMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 
 	rec := httptest.NewRecorder()
@@ -63,9 +75,9 @@ func TestAuthMiddlewareInvalidKey(t *testing.T) {
 }
 
 func TestRequirePermissionsEnforces(t *testing.T) {
-	store := &APIKeyStore{byKey: map[string]*APIKey{
-		"secret": {ID: "test", Permissions: []string{PermCanSearch}},
-	}}
+	store := testAPIKeyStore(map[string]*APIKey{
+		"secret": {ID: "test", Key: "secret", Permissions: []string{PermCanSearch}},
+	})
 	s := &Server{cfg: &config.Config{AuthMode: config.AuthAPIKey}, apiKeys: store}
 
 	nextCalled := false
@@ -88,9 +100,9 @@ func TestRequirePermissionsEnforces(t *testing.T) {
 }
 
 func TestRequirePermissionsForbidden(t *testing.T) {
-	store := &APIKeyStore{byKey: map[string]*APIKey{
-		"secret": {ID: "test", Permissions: []string{PermCanSearch}},
-	}}
+	store := testAPIKeyStore(map[string]*APIKey{
+		"secret": {ID: "test", Key: "secret", Permissions: []string{PermCanSearch}},
+	})
 	s := &Server{cfg: &config.Config{AuthMode: config.AuthAPIKey}, apiKeys: store}
 
 	h := s.authMiddleware()(s.requirePermissions(PermCanDelete)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})))
