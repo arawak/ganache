@@ -7,6 +7,6 @@ import (
 )
 
 // Handler returns a Swagger UI handler (assets embedded, no CDN).
-func Handler(specPath string) http.Handler {
-	return swgui.New("Ganache API", specPath, "/swagger")
+func Handler(specPath, mountPath string) http.Handler {
+	return swgui.New("Ganache API", specPath, mountPath)
 }

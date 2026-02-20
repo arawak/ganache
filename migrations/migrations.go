@@ -15,10 +15,14 @@ import (
 var FS embed.FS
 
 func Up(dsn string) error {
-	m, err := migrator(dsn)
+	m, db, err := migrator(dsn)
 	if err != nil {
 		return err
 	}
+	defer func() {
+		_, _ = m.Close()
+		_ = db.Close()
+	}()
 	err = m.Up()
 	if err == migrate.ErrNoChange {
 		return nil
@@ -30,10 +34,14 @@ func Up(dsn string) error {
 }
 
 func Down(dsn string) error {
-	m, err := migrator(dsn)
+	m, db, err := migrator(dsn)
 	if err != nil {
 		return err
 	}
+	defer func() {
+		_, _ = m.Close()
+		_ = db.Close()
+	}()
 	err = m.Down()
 	if err == migrate.ErrNoChange {
 		return nil
@@ -44,22 +52,22 @@ func Down(dsn string) error {
 	return nil
 }
 
-func migrator(dsn string) (*migrate.Migrate, error) {
+func migrator(dsn string) (*migrate.Migrate, *sql.DB, error) {
 	src, err := iofs.New(FS, ".")
 	if err != nil {
-		return nil, fmt.Errorf("create migration source: %w", err)
+		return nil, nil, fmt.Errorf("create migration source: %w", err)
 	}
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open db: %w", err)
+		return nil, nil, fmt.Errorf("open db: %w", err)
 	}
 	driver, err := mysql.WithInstance(db, &mysql.Config{})
 	if err != nil {
-		return nil, fmt.Errorf("create driver: %w", err)
+		return nil, nil, fmt.Errorf("create driver: %w", err)
 	}
 	m, err := migrate.NewWithInstance("iofs", src, "mysql", driver)
 	if err != nil {
-		return nil, fmt.Errorf("create migrator: %w", err)
+		return nil, nil, fmt.Errorf("create migrator: %w", err)
 	}
-	return m, nil
+	return m, db, nil
 }

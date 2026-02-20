@@ -93,7 +93,7 @@ func NewRouter(cfg *config.Config, st *store.Store, mediaMgr *media.Manager, api
 	r.Get("/healthz", s.GetHealthz)
 	r.Get("/readyz", s.GetReadyz)
 	r.Get(cfg.OpenAPIPath, s.serveOpenAPI)
-	r.Mount(cfg.SwaggerUIPath, swaggerui.Handler(cfg.OpenAPIPath))
+	r.Mount(cfg.SwaggerUIPath, swaggerui.Handler(cfg.OpenAPIPath, cfg.SwaggerUIPath))
 
 	wrapper := ServerInterfaceWrapper{Handler: s, ErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error(), nil)
@@ -107,14 +107,6 @@ func NewRouter(cfg *config.Config, st *store.Store, mediaMgr *media.Manager, api
 		r.With(s.requirePermissions(PermCanSearch)).Get("/api/assets/{id}", wrapper.GetAsset)
 		r.With(s.requirePermissions(PermCanUpdate)).Patch("/api/assets/{id}", wrapper.UpdateAsset)
 		r.With(s.requirePermissions(PermCanSearch)).Get("/api/tags", wrapper.ListTags)
-	})
-
-	r.Group(func(r chi.Router) {
-		if !cfg.PublicMedia {
-			r.Use(s.authMiddleware())
-			r.Use(s.requirePermissions(PermCanSearch))
-		}
-		r.Get("/media/{id}/{variant}", wrapper.GetMediaVariant)
 	})
 
 	r.Group(func(r chi.Router) {
@@ -269,10 +261,9 @@ func (s *Server) UploadAsset(w http.ResponseWriter, r *http.Request) {
 	save, err := s.media.Save(r.Context(), file, header.Filename, s.cfg.MaxUploadBytes, s.cfg.MaxPixels)
 	if err != nil {
 		status := http.StatusInternalServerError
-		switch err {
-		case media.ErrTooLarge:
+		if errors.Is(err, media.ErrTooLarge) {
 			status = http.StatusBadRequest
-		case media.ErrInvalidImage:
+		} else if errors.Is(err, media.ErrInvalidImage) {
 			status = http.StatusBadRequest
 		}
 		writeError(w, status, "upload_failed", err.Error(), nil)
@@ -291,12 +282,20 @@ func (s *Server) UploadAsset(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "title exceeds maximum length of 255 characters", nil)
 		return
 	}
+	if len(caption) > 65536 {
+		writeError(w, http.StatusBadRequest, "bad_request", "caption exceeds maximum length of 65536 characters", nil)
+		return
+	}
 	if len(credit) > 255 {
 		writeError(w, http.StatusBadRequest, "bad_request", "credit exceeds maximum length of 255 characters", nil)
 		return
 	}
 	if len(source) > 255 {
 		writeError(w, http.StatusBadRequest, "bad_request", "source exceeds maximum length of 255 characters", nil)
+		return
+	}
+	if len(usageNotes) > 65536 {
+		writeError(w, http.StatusBadRequest, "bad_request", "usageNotes exceeds maximum length of 65536 characters", nil)
 		return
 	}
 	for _, tag := range tags {
@@ -362,12 +361,20 @@ func (s *Server) UpdateAsset(w http.ResponseWriter, r *http.Request, id AssetId)
 		writeError(w, http.StatusBadRequest, "bad_request", "title exceeds maximum length of 255 characters", nil)
 		return
 	}
+	if payload.Caption != nil && len(*payload.Caption) > 65536 {
+		writeError(w, http.StatusBadRequest, "bad_request", "caption exceeds maximum length of 65536 characters", nil)
+		return
+	}
 	if payload.Credit != nil && len(*payload.Credit) > 255 {
 		writeError(w, http.StatusBadRequest, "bad_request", "credit exceeds maximum length of 255 characters", nil)
 		return
 	}
 	if payload.Source != nil && len(*payload.Source) > 255 {
 		writeError(w, http.StatusBadRequest, "bad_request", "source exceeds maximum length of 255 characters", nil)
+		return
+	}
+	if payload.UsageNotes != nil && len(*payload.UsageNotes) > 65536 {
+		writeError(w, http.StatusBadRequest, "bad_request", "usageNotes exceeds maximum length of 65536 characters", nil)
 		return
 	}
 	if payload.Tags != nil {
@@ -463,6 +470,7 @@ func (s *Server) GetMediaVariant(w http.ResponseWriter, r *http.Request, id Asse
 
 	etag := fmt.Sprintf("\"%s-%s\"", asset.SHA256, variant)
 	if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
+		w.Header().Set("ETag", etag)
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
@@ -537,8 +545,9 @@ func loggingMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
-			next.ServeHTTP(w, r)
-			logger.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(start).String())
+			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			next.ServeHTTP(ww, r)
+			logger.Info("request", "method", r.Method, "path", r.URL.Path, "status", ww.Status(), "duration", time.Since(start).String())
 		})
 	}
 }

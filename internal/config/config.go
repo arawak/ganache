@@ -95,6 +95,7 @@ func getInt(key string, def int) int {
 		if err == nil {
 			return i
 		}
+		fmt.Fprintf(os.Stderr, "warning: invalid value for %s=%q, using default %d\n", key, v, def)
 	}
 	return def
 }
@@ -105,6 +106,7 @@ func getInt64(key string, def int64) int64 {
 		if err == nil {
 			return i
 		}
+		fmt.Fprintf(os.Stderr, "warning: invalid value for %s=%q, using default %d\n", key, v, def)
 	}
 	return def
 }
@@ -112,7 +114,13 @@ func getInt64(key string, def int64) int64 {
 func getBool(key string, def bool) bool {
 	if v := os.Getenv(key); v != "" {
 		v = strings.ToLower(strings.TrimSpace(v))
-		return v == "1" || v == "true" || v == "yes" || v == "y"
+		if v == "1" || v == "true" || v == "yes" || v == "y" {
+			return true
+		}
+		if v == "0" || v == "false" || v == "no" || v == "n" {
+			return false
+		}
+		fmt.Fprintf(os.Stderr, "warning: invalid value for %s=%q, using default %v\n", key, v, def)
 	}
 	return def
 }
