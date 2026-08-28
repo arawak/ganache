@@ -84,6 +84,8 @@ func TestEndToEnd(t *testing.T) {
 		StorageRoot:        root,
 		MaxUploadBytes:     config.DefaultMaxUploadBytes,
 		MaxPixels:          config.DefaultMaxPixels,
+		ContentMaxWidth:    config.DefaultContentMaxWidth,
+		ThumbMaxWidth:      config.DefaultThumbMaxWidth,
 		PublicMedia:        true,
 		AuthMode:           config.AuthNone,
 		CORSAllowedOrigins: nil,
@@ -91,7 +93,10 @@ func TestEndToEnd(t *testing.T) {
 		OpenAPIPath:        "/openapi.yaml",
 	}
 	st := store.New(db)
-	mediaMgr := media.NewManager(root)
+	mediaMgr := media.NewManager(root, media.VariantConfig{
+		ContentMaxWidth: cfg.ContentMaxWidth,
+		ThumbMaxWidth:   cfg.ThumbMaxWidth,
+	})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ts := httptest.NewServer(httpapi.NewRouter(cfg, st, mediaMgr, nil, logger))
 	t.Cleanup(ts.Close)
@@ -300,6 +305,8 @@ func TestReuploadDeletedAsset(t *testing.T) {
 		StorageRoot:        root,
 		MaxUploadBytes:     config.DefaultMaxUploadBytes,
 		MaxPixels:          config.DefaultMaxPixels,
+		ContentMaxWidth:    config.DefaultContentMaxWidth,
+		ThumbMaxWidth:      config.DefaultThumbMaxWidth,
 		PublicMedia:        true,
 		AuthMode:           config.AuthNone,
 		CORSAllowedOrigins: nil,
@@ -307,7 +314,10 @@ func TestReuploadDeletedAsset(t *testing.T) {
 		OpenAPIPath:        "/openapi.yaml",
 	}
 	st := store.New(db)
-	mediaMgr := media.NewManager(root)
+	mediaMgr := media.NewManager(root, media.VariantConfig{
+		ContentMaxWidth: cfg.ContentMaxWidth,
+		ThumbMaxWidth:   cfg.ThumbMaxWidth,
+	})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ts := httptest.NewServer(httpapi.NewRouter(cfg, st, mediaMgr, nil, logger))
 	t.Cleanup(ts.Close)

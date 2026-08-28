@@ -53,7 +53,10 @@ func main() {
 	}
 
 	storeSvc := store.New(db)
-	mediaMgr := media.NewManager(cfg.StorageRoot)
+	mediaMgr := media.NewManager(cfg.StorageRoot, media.VariantConfig{
+		ContentMaxWidth: cfg.ContentMaxWidth,
+		ThumbMaxWidth:   cfg.ThumbMaxWidth,
+	})
 	router := httpapi.NewRouter(cfg, storeSvc, mediaMgr, apiKeys, logger)
 
 	srv := &http.Server{Addr: cfg.Bind, Handler: router}
