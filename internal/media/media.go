@@ -18,7 +18,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	_ "golang.org/x/image/webp"
+	"github.com/gen2brain/webp"
+	"golang.org/x/image/draw"
 )
 
 const (
@@ -30,16 +31,23 @@ const (
 var ErrTooLarge = errors.New("upload too large")
 var ErrInvalidImage = errors.New("invalid image")
 
+// VariantConfig controls the dimensions of generated media variants.
+type VariantConfig struct {
+	ContentMaxWidth int
+	ThumbMaxWidth   int
+}
+
 // Manager handles filesystem operations for assets.
 type Manager struct {
-	root string
+	root     string
+	variants VariantConfig
 }
 
-func NewManager(root string) *Manager {
-	return &Manager{root: root}
+func NewManager(root string, variants VariantConfig) *Manager {
+	return &Manager{root: root, variants: variants}
 }
 
-// Save streams the upload to disk, computes SHA-256, validates pixels, and generates stub variants.
+// SaveResult describes a validated, persisted upload.
 type SaveResult struct {
 	SHA256 string
 	Bytes  int64
@@ -49,6 +57,7 @@ type SaveResult struct {
 	Ext    string
 }
 
+// Save streams the upload to disk, computes SHA-256, validates pixels, and generates WebP variants.
 func (m *Manager) Save(ctx context.Context, r io.Reader, filename string, maxBytes int64, maxPixels int) (*SaveResult, error) {
 	if err := os.MkdirAll(m.root, 0o755); err != nil {
 		return nil, err
@@ -56,7 +65,7 @@ func (m *Manager) Save(ctx context.Context, r io.Reader, filename string, maxByt
 
 	lim := &io.LimitedReader{R: r, N: maxBytes + 1}
 	br := bufio.NewReader(lim)
-	peek, peekErr := br.Peek(8192)
+	peek, peekErr := br.Peek(512)
 	if peekErr != nil && !errors.Is(peekErr, io.EOF) {
 		return nil, fmt.Errorf("failed to peek for MIME detection: %w", peekErr)
 	}
@@ -88,7 +97,7 @@ func (m *Manager) Save(ctx context.Context, r io.Reader, filename string, maxByt
 	if err != nil {
 		return nil, ErrInvalidImage
 	}
-	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width*cfg.Height > maxPixels {
+	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > int64(maxPixels) {
 		return nil, ErrInvalidImage
 	}
 
@@ -136,33 +145,82 @@ func (m *Manager) Save(ctx context.Context, r io.Reader, filename string, maxByt
 }
 
 func (m *Manager) generateVariants(origPath, sha string) error {
-	contentPath := m.pathFor(sha, VariantContent, ".webp")
-	thumbPath := m.pathFor(sha, VariantThumb, ".webp")
-	if err := m.ensureDir(contentPath); err != nil {
+	original, err := os.Open(origPath)
+	if err != nil {
 		return err
 	}
-	if err := m.ensureDir(thumbPath); err != nil {
-		return err
+	imageData, _, decodeErr := image.Decode(original)
+	closeErr := original.Close()
+	if decodeErr != nil {
+		return fmt.Errorf("decode original for variants: %w", decodeErr)
 	}
-	// Stub generation: copy original to variants. Replace with libvips later.
-	if err := copyIfMissing(origPath, contentPath); err != nil {
-		return err
+	if closeErr != nil {
+		return closeErr
 	}
-	if err := copyIfMissing(origPath, thumbPath); err != nil {
-		return err
+
+	variants := []struct {
+		name     string
+		maxWidth int
+	}{
+		{name: VariantContent, maxWidth: m.variants.ContentMaxWidth},
+		{name: VariantThumb, maxWidth: m.variants.ThumbMaxWidth},
+	}
+	for _, variant := range variants {
+		if variant.maxWidth <= 0 {
+			return fmt.Errorf("%s max width must be positive", variant.name)
+		}
+		path := m.pathFor(sha, variant.name, ".webp")
+		if err := m.writeVariant(path, resizeToMaxWidth(imageData, variant.maxWidth)); err != nil {
+			return fmt.Errorf("generate %s variant: %w", variant.name, err)
+		}
 	}
 	return nil
 }
 
-func (m *Manager) ensureDir(path string) error {
-	return os.MkdirAll(filepath.Dir(path), 0o755)
+func resizeToMaxWidth(source image.Image, maxWidth int) image.Image {
+	bounds := source.Bounds()
+	if bounds.Dx() <= maxWidth {
+		return source
+	}
+
+	height := int((int64(bounds.Dy())*int64(maxWidth) + int64(bounds.Dx())/2) / int64(bounds.Dx()))
+	if height < 1 {
+		height = 1
+	}
+	resized := image.NewNRGBA(image.Rect(0, 0, maxWidth, height))
+	draw.CatmullRom.Scale(resized, resized.Bounds(), source, bounds, draw.Over, nil)
+	return resized
 }
 
-func copyIfMissing(src, dst string) error {
-	if _, err := os.Stat(dst); err == nil {
-		return nil
+func (m *Manager) writeVariant(path string, source image.Image) error {
+	if err := m.ensureDir(path); err != nil {
+		return err
 	}
-	return copyFile(src, dst)
+
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".variant-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer func() {
+		_ = temporary.Close()
+		_ = os.Remove(temporaryPath)
+	}()
+
+	if err := webp.Encode(temporary, source, webp.Options{Quality: 82, Method: 4}); err != nil {
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, path)
+}
+
+func (m *Manager) ensureDir(path string) error {
+	return os.MkdirAll(filepath.Dir(path), 0o755)
 }
 
 func copyFile(src, dst string) error {

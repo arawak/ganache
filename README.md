@@ -61,11 +61,11 @@ Where `ab` and `cd` are the first 4 hex chars split into two directories.
 
 ### Variants
 
-* **original**: stored as uploaded (validated)
-* **content**: resized for articles/pages (e.g., max width 1600px) + WebP
-* **thumb**: small preview (e.g., max width 400px) + WebP
+* **original**: validated and stored byte-for-byte as uploaded
+* **content**: encoded as WebP and constrained to `GANACHE_CONTENT_MAX_WIDTH` (1600px by default)
+* **thumb**: encoded as WebP and constrained to `GANACHE_THUMB_MAX_WIDTH` (400px by default)
 
-Variant sizes should be configurable.
+Generated variants preserve aspect ratio and never upscale a narrower source image. Their WebP encoding omits source EXIF metadata.
 
 ### Deduplication behavior
 
@@ -234,14 +234,14 @@ Authentication (API key now, OIDC/JWT later) is separate from authorization. Eve
 ### Upload safety
 
 * Enforce maximum upload size and maximum pixel dimensions.
-* Validate content type by sniffing file headers (not just extension).
-* Strip EXIF by default (configurable).
+* Validate image content by decoding it rather than trusting the filename extension.
+* Preserve the original upload; generated variants omit source metadata.
 * Reject unsupported formats.
 
 ## Performance and resource use
 
-* Image processing happens on upload (not on read path).
-* Prefer libvips for low memory usage and speed.
+* Image processing happens on upload, not on the read path.
+* Resizing and WebP encoding remain CGO-free so the static container has no native image-library dependency.
 * Streaming upload prevents buffering large payloads in RAM.
 * Serving is mostly static-file reads with minimal logic and strong caching.
 
