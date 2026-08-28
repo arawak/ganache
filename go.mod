@@ -3,6 +3,7 @@ module github.com/arawak/ganache
 go 1.24.0
 
 require (
+	github.com/disintegration/imaging v1.6.2
 	github.com/gen2brain/webp v0.6.4
 	github.com/go-chi/chi/v5 v5.2.3
 	github.com/go-chi/cors v1.2.2
@@ -13,7 +14,6 @@ require (
 	github.com/oapi-codegen/runtime v1.1.2
 	github.com/swaggest/swgui v1.8.5
 	github.com/testcontainers/testcontainers-go v0.40.0
-	golang.org/x/image v0.34.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -72,6 +72,7 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.37.0 // indirect
 	go.opentelemetry.io/otel/trace v1.37.0 // indirect
 	golang.org/x/crypto v0.45.0 // indirect
+	golang.org/x/image v0.34.0 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.32.0 // indirect

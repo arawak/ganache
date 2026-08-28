@@ -18,8 +18,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/disintegration/imaging"
 	"github.com/gen2brain/webp"
-	"golang.org/x/image/draw"
 )
 
 const (
@@ -59,6 +59,9 @@ type SaveResult struct {
 
 // Save streams the upload to disk, computes SHA-256, validates pixels, and generates WebP variants.
 func (m *Manager) Save(ctx context.Context, r io.Reader, filename string, maxBytes int64, maxPixels int) (*SaveResult, error) {
+	if err := m.validateVariantConfig(); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(m.root, 0o755); err != nil {
 		return nil, err
 	}
@@ -76,8 +79,8 @@ func (m *Manager) Save(ctx context.Context, r io.Reader, filename string, maxByt
 		return nil, err
 	}
 	defer func() {
-		tmp.Close()
-		os.Remove(tmp.Name())
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
 	}()
 
 	hash := sha256.New()
@@ -101,6 +104,14 @@ func (m *Manager) Save(ctx context.Context, r io.Reader, filename string, maxByt
 		return nil, ErrInvalidImage
 	}
 
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	imageData, err := imaging.Decode(tmp, imaging.AutoOrientation(true))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidImage, err)
+	}
+
 	ext := strings.ToLower(filepath.Ext(filename))
 	if ext == "" {
 		if mimeExts, _ := mime.ExtensionsByType(mimeType); len(mimeExts) > 0 {
@@ -117,47 +128,30 @@ func (m *Manager) Save(ctx context.Context, r io.Reader, filename string, maxByt
 	if err := m.ensureDir(origPath); err != nil {
 		return nil, err
 	}
-
-	var renamed bool
-	if err := os.Rename(tmp.Name(), origPath); err != nil {
-		if copyErr := copyFile(tmp.Name(), origPath); copyErr != nil {
-			return nil, fmt.Errorf("failed to move file to destination: rename failed (%w), copy failed (%v)", err, copyErr)
-		}
-	} else {
-		renamed = true
+	createdOriginal, err := installOriginal(tmp.Name(), origPath)
+	if err != nil {
+		return nil, err
 	}
 
-	if err := m.generateVariants(origPath, shaHex); err != nil {
-		if renamed {
-			os.Remove(origPath)
+	if err := m.generateVariants(imageData, shaHex); err != nil {
+		if createdOriginal {
+			_ = os.Remove(origPath)
 		}
 		return nil, err
 	}
 
+	orientedBounds := imageData.Bounds()
 	return &SaveResult{
 		SHA256: shaHex,
 		Bytes:  written,
 		Mime:   mimeType,
-		Width:  cfg.Width,
-		Height: cfg.Height,
+		Width:  orientedBounds.Dx(),
+		Height: orientedBounds.Dy(),
 		Ext:    ext,
 	}, nil
 }
 
-func (m *Manager) generateVariants(origPath, sha string) error {
-	original, err := os.Open(origPath)
-	if err != nil {
-		return err
-	}
-	imageData, _, decodeErr := image.Decode(original)
-	closeErr := original.Close()
-	if decodeErr != nil {
-		return fmt.Errorf("decode original for variants: %w", decodeErr)
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-
+func (m *Manager) generateVariants(imageData image.Image, sha string) error {
 	variants := []struct {
 		name     string
 		maxWidth int
@@ -165,77 +159,99 @@ func (m *Manager) generateVariants(origPath, sha string) error {
 		{name: VariantContent, maxWidth: m.variants.ContentMaxWidth},
 		{name: VariantThumb, maxWidth: m.variants.ThumbMaxWidth},
 	}
-	for _, variant := range variants {
-		if variant.maxWidth <= 0 {
-			return fmt.Errorf("%s max width must be positive", variant.name)
+
+	type stagedVariant struct {
+		target    string
+		temporary string
+	}
+	staged := make([]stagedVariant, 0, len(variants))
+	defer func() {
+		for _, variant := range staged {
+			if variant.temporary != "" {
+				_ = os.Remove(variant.temporary)
+			}
 		}
-		path := m.pathFor(sha, variant.name, ".webp")
-		if err := m.writeVariant(path, resizeToMaxWidth(imageData, variant.maxWidth)); err != nil {
+	}()
+
+	for _, variant := range variants {
+		target := m.pathFor(sha, variant.name, ".webp")
+		temporary, err := m.stageVariant(target, resizeToMaxWidth(imageData, variant.maxWidth))
+		if err != nil {
 			return fmt.Errorf("generate %s variant: %w", variant.name, err)
 		}
+		staged = append(staged, stagedVariant{target: target, temporary: temporary})
+	}
+
+	for index := range staged {
+		if err := os.Rename(staged[index].temporary, staged[index].target); err != nil {
+			return fmt.Errorf("publish %s variant: %w", variants[index].name, err)
+		}
+		staged[index].temporary = ""
 	}
 	return nil
 }
 
 func resizeToMaxWidth(source image.Image, maxWidth int) image.Image {
-	bounds := source.Bounds()
-	if bounds.Dx() <= maxWidth {
+	if source.Bounds().Dx() <= maxWidth {
 		return source
 	}
-
-	height := int((int64(bounds.Dy())*int64(maxWidth) + int64(bounds.Dx())/2) / int64(bounds.Dx()))
-	if height < 1 {
-		height = 1
-	}
-	resized := image.NewNRGBA(image.Rect(0, 0, maxWidth, height))
-	draw.CatmullRom.Scale(resized, resized.Bounds(), source, bounds, draw.Over, nil)
-	return resized
+	return imaging.Resize(source, maxWidth, 0, imaging.CatmullRom)
 }
 
-func (m *Manager) writeVariant(path string, source image.Image) error {
+func (m *Manager) stageVariant(path string, source image.Image) (string, error) {
 	if err := m.ensureDir(path); err != nil {
-		return err
+		return "", err
 	}
 
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".variant-*")
 	if err != nil {
-		return err
+		return "", err
 	}
 	temporaryPath := temporary.Name()
+	complete := false
 	defer func() {
-		_ = temporary.Close()
-		_ = os.Remove(temporaryPath)
+		if !complete {
+			_ = temporary.Close()
+			_ = os.Remove(temporaryPath)
+		}
 	}()
 
 	if err := webp.Encode(temporary, source, webp.Options{Quality: 82, Method: 4}); err != nil {
-		return err
+		return "", err
 	}
 	if err := temporary.Sync(); err != nil {
-		return err
+		return "", err
 	}
 	if err := temporary.Close(); err != nil {
-		return err
+		return "", err
 	}
-	return os.Rename(temporaryPath, path)
+	complete = true
+	return temporaryPath, nil
+}
+
+func (m *Manager) validateVariantConfig() error {
+	if m.variants.ContentMaxWidth <= 0 {
+		return fmt.Errorf("%s max width must be positive", VariantContent)
+	}
+	if m.variants.ThumbMaxWidth <= 0 {
+		return fmt.Errorf("%s max width must be positive", VariantThumb)
+	}
+	return nil
+}
+
+func installOriginal(temporaryPath, originalPath string) (bool, error) {
+	err := os.Link(temporaryPath, originalPath)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrExist) {
+		return false, nil
+	}
+	return false, fmt.Errorf("install original: %w", err)
 }
 
 func (m *Manager) ensureDir(path string) error {
 	return os.MkdirAll(filepath.Dir(path), 0o755)
-}
-
-func copyFile(src, dst string) error {
-	r, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer r.Close()
-	w, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer w.Close()
-	_, err = io.Copy(w, r)
-	return err
 }
 
 func (m *Manager) pathFor(sha, variant, ext string) string {

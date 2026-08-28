@@ -65,7 +65,7 @@ Where `ab` and `cd` are the first 4 hex chars split into two directories.
 * **content**: encoded as WebP and constrained to `GANACHE_CONTENT_MAX_WIDTH` (1600px by default)
 * **thumb**: encoded as WebP and constrained to `GANACHE_THUMB_MAX_WIDTH` (400px by default)
 
-Generated variants preserve aspect ratio and never upscale a narrower source image. Their WebP encoding omits source EXIF metadata.
+Generated variants preserve aspect ratio, never upscale a narrower source image, apply EXIF orientation to the pixels, and omit the source metadata.
 
 ### Deduplication behavior
 
