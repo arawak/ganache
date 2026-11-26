@@ -46,6 +46,11 @@ type Config struct {
 func Load() (*Config, error) {
 	_ = godotenv.Load()
 
+	publicMedia, err := getBool("GANACHE_PUBLIC_MEDIA", true)
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := &Config{
 		Bind:               getenv("GANACHE_BIND", DefaultBind),
 		StorageRoot:        getenv("GANACHE_STORAGE_ROOT", DefaultStorageRoot),
@@ -53,7 +58,7 @@ func Load() (*Config, error) {
 		MaxPixels:          getInt("GANACHE_MAX_PIXELS", DefaultMaxPixels),
 		ContentMaxWidth:    getInt("GANACHE_CONTENT_MAX_WIDTH", DefaultContentMaxWidth),
 		ThumbMaxWidth:      getInt("GANACHE_THUMB_MAX_WIDTH", DefaultThumbMaxWidth),
-		PublicMedia:        getBool("GANACHE_PUBLIC_MEDIA", true),
+		PublicMedia:        publicMedia,
 		AuthMode:           AuthMode(getenv("GANACHE_AUTH_MODE", string(AuthAPIKey))),
 		CORSAllowedOrigins: splitAndTrim(os.Getenv("GANACHE_CORS_ALLOWED_ORIGINS")),
 		LogLevel:           os.Getenv("GANACHE_LOG_LEVEL"),
@@ -70,6 +75,9 @@ func Load() (*Config, error) {
 	case AuthNone, AuthAPIKey, AuthOIDC:
 	default:
 		return nil, fmt.Errorf("invalid GANACHE_AUTH_MODE: %s", cfg.AuthMode)
+	}
+	if !cfg.PublicMedia && cfg.AuthMode != AuthAPIKey {
+		return nil, fmt.Errorf("GANACHE_PUBLIC_MEDIA=false requires GANACHE_AUTH_MODE=apikey")
 	}
 
 	if cfg.AuthMode == AuthAPIKey {
@@ -111,18 +119,19 @@ func getInt64(key string, def int64) int64 {
 	return def
 }
 
-func getBool(key string, def bool) bool {
-	if v := os.Getenv(key); v != "" {
-		v = strings.ToLower(strings.TrimSpace(v))
-		if v == "1" || v == "true" || v == "yes" || v == "y" {
-			return true
-		}
-		if v == "0" || v == "false" || v == "no" || v == "n" {
-			return false
-		}
-		fmt.Fprintf(os.Stderr, "warning: invalid value for %s=%q, using default %v\n", key, v, def)
+func getBool(key string, def bool) (bool, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return def, nil
 	}
-	return def
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "y":
+		return true, nil
+	case "0", "false", "no", "n":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid %s: expected a boolean, got %q", key, v)
+	}
 }
 
 func splitAndTrim(input string) []string {

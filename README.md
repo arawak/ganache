@@ -179,8 +179,20 @@ Ganache does **not** mandate an editor format. It exposes stable URLs and IDs so
   * `none` — no authentication enforced (local/dev only).
   * `apikey` — require a configured API key on `/api/*`.
   * `oidc` — planned: validate JWTs from an OpenID Connect / OAuth2 provider.
-* `/media/*` is public by default and can be protected by setting `GANACHE_PUBLIC_MEDIA=false`.
+* `/media/*` is public when `GANACHE_PUBLIC_MEDIA` is unset. To require authentication for media, use the private-media configuration below.
 * `/healthz` and `/readyz` are always unauthenticated.
+
+#### Private media
+
+```env
+GANACHE_PUBLIC_MEDIA=false
+GANACHE_AUTH_MODE=apikey
+GANACHE_API_KEYS_FILE=/path/to/api-keys.yaml
+```
+
+Clients must send an `X-Api-Key` with `can_search`. Invalid `GANACHE_PUBLIC_MEDIA` values and private media without API-key authentication are rejected at startup.
+
+Private media responses send `Cache-Control: private, no-store`; configure reverse proxies and CDNs to honor it rather than override it. If private media was already deployed, or you're switching from public to private, purge previously cached `/media/*` responses from shared caches. The new headers do not evict existing cache entries.
 
 ### API key authentication (design)
 
@@ -270,7 +282,7 @@ All configuration via environment variables (v1):
 Recommended reverse proxy behavior:
 
 * Gzip/brotli for JSON endpoints
-* Long cache for `/media/*` variants
+* Cache public `/media/*` variants according to their response headers; do not cache private media.
 * Range requests optional (not needed for images, but harmless)
 
 ## Observability
