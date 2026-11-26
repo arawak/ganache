@@ -15,6 +15,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -105,8 +107,29 @@ func TestEndToEnd(t *testing.T) {
 	getAsset(t, ts.URL+"/api/assets/", assetID)
 	patchAsset(t, ts.URL+"/api/assets/", assetID)
 	searchAsset(t, ts.URL+"/api/assets", assetID)
-	mediaURL := fmt.Sprintf("%s/media/%d/thumb", ts.URL, assetID)
-	validateMedia(t, mediaURL)
+	t.Run("media_access_and_caching", func(t *testing.T) {
+		keyFile := filepath.Join(t.TempDir(), "api-keys.yaml")
+		if err := os.WriteFile(keyFile, []byte(`
+- id: reader
+  key: search-test-key
+  permissions: [can_search]
+- id: uploader
+  key: upload-test-key
+  permissions: [can_upload]
+`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		keys, err := httpapi.LoadAPIKeys(keyFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		privateCfg := *cfg
+		privateCfg.PublicMedia = false
+		privateCfg.AuthMode = config.AuthAPIKey
+		privateServer := httptest.NewServer(httpapi.NewRouter(&privateCfg, st, mediaMgr, keys, logger))
+		t.Cleanup(privateServer.Close)
+		validateMediaAccess(t, ts.URL, privateServer.URL, assetID)
+	})
 	deleteAsset(t, ts.URL+"/api/assets/", assetID)
 	ensureDeleted(t, ts.URL+"/api/assets", assetID)
 	readyz(t, ts.URL+"/readyz")
@@ -208,36 +231,76 @@ func searchAsset(t *testing.T, url string, id int64) {
 	}
 }
 
-func validateMedia(t *testing.T, url string) {
-	resp, err := http.Get(url)
+func validateMediaAccess(t *testing.T, publicURL, privateURL string, assetID int64) {
+	t.Helper()
+	for _, variant := range []struct {
+		name        string
+		publicCache string
+	}{
+		{"original", "public, max-age=86400"},
+		{"content", "public, max-age=31536000, immutable"},
+		{"thumb", "public, max-age=31536000, immutable"},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			path := fmt.Sprintf("/media/%d/%s", assetID, variant.name)
+			publicETag := checkMediaResponse(t, publicURL+path, "", "", http.StatusOK, variant.publicCache)
+			if publicETag == "" {
+				t.Fatal("missing public ETag")
+			}
+			checkMediaResponse(t, publicURL+path, "", publicETag, http.StatusNotModified, "")
+
+			const privateCache = "private, no-store"
+			const searchKey = "search-test-key"
+			privateETag := checkMediaResponse(t, privateURL+path, searchKey, "", http.StatusOK, privateCache)
+			if privateETag != publicETag {
+				t.Fatalf("private ETag = %q, want %q", privateETag, publicETag)
+			}
+			checkMediaResponse(t, privateURL+path, searchKey, privateETag, http.StatusNotModified, privateCache)
+
+			for _, tc := range []struct {
+				name   string
+				key    string
+				etag   string
+				status int
+			}{
+				{"missing_key", "", "", http.StatusUnauthorized},
+				{"invalid_key", "invalid-test-key", "", http.StatusUnauthorized},
+				{"missing_permission", "upload-test-key", "", http.StatusForbidden},
+				{"unauthenticated_conditional", "", privateETag, http.StatusUnauthorized},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					checkMediaResponse(t, privateURL+path, tc.key, tc.etag, tc.status, privateCache)
+				})
+			}
+		})
+	}
+}
+
+func checkMediaResponse(t *testing.T, url, key, etag string, wantStatus int, wantCache string) string {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
-		t.Fatalf("media get: %v", err)
+		t.Fatal(err)
+	}
+	if key != "" {
+		req.Header.Set("X-Api-Key", key)
+	}
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != wantStatus {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("media status %d body %s", resp.StatusCode, string(body))
+		t.Fatalf("GET %s: status = %d, want %d; body: %s", url, resp.StatusCode, wantStatus, body)
 	}
-	etag := resp.Header.Get("ETag")
-	if etag == "" {
-		t.Fatalf("missing etag")
+	if got := resp.Header.Get("Cache-Control"); got != wantCache {
+		t.Fatalf("GET %s: Cache-Control = %q, want %q", url, got, wantCache)
 	}
-	cache := resp.Header.Get("Cache-Control")
-	if cache == "" {
-		t.Fatalf("missing cache control")
-	}
-
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
-	req.Header.Set("If-None-Match", etag)
-	resp2, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("etag request: %v", err)
-	}
-	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusNotModified {
-		body, _ := io.ReadAll(resp2.Body)
-		t.Fatalf("expected 304 got %d body %s", resp2.StatusCode, string(body))
-	}
+	return resp.Header.Get("ETag")
 }
 
 func deleteAsset(t *testing.T, base string, id int64) {

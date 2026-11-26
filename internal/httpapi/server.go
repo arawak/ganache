@@ -111,6 +111,12 @@ func NewRouter(cfg *config.Config, st *store.Store, mediaMgr *media.Manager, api
 
 	r.Group(func(r chi.Router) {
 		if !cfg.PublicMedia {
+			r.Use(func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Cache-Control", "private, no-store")
+					next.ServeHTTP(w, r)
+				})
+			})
 			r.Use(s.authMiddleware())
 			r.Use(s.requirePermissions(PermCanSearch))
 		}
@@ -489,11 +495,13 @@ func (s *Server) GetMediaVariant(w http.ResponseWriter, r *http.Request, id Asse
 	}
 	w.Header().Set("Content-Type", mimeType)
 	w.Header().Set("ETag", etag)
-	cache := "public, max-age=86400"
-	if variant != GetMediaVariantParamsVariantOriginal {
-		cache = "public, max-age=31536000, immutable"
+	if s.cfg.PublicMedia {
+		cache := "public, max-age=86400"
+		if variant != GetMediaVariantParamsVariantOriginal {
+			cache = "public, max-age=31536000, immutable"
+		}
+		w.Header().Set("Cache-Control", cache)
 	}
-	w.Header().Set("Cache-Control", cache)
 	if info != nil {
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	}
